@@ -29,3 +29,23 @@ def test_thinking_is_logged_separately() -> None:
     assert "<think>" not in c.content
     assert c.reasoning, "expected reasoning_content on a thinking request"
     assert "391" in c.content
+
+
+def test_needle_in_50k_lines() -> None:
+    """A needle-in-a-haystack far beyond the 32K window; pluto must find it."""
+    import random
+
+    from reclamo.rlm import RLM
+
+    rng = random.Random(7)
+    lines = [f"record {i}: value {rng.randint(0, 10**6)}" for i in range(50_000)]
+    needle_line = 31_337
+    lines[needle_line] = "record 31337: the secret passphrase is MANDOLIN-ECLIPSE"
+    context = "\n".join(lines)
+
+    cfg = load_config("pluto")
+    client = LMClient(cfg, resolve_api_key(cfg))
+    result = RLM(cfg, client).completion(
+        context, "What is the secret passphrase mentioned somewhere in the context?"
+    )
+    assert "MANDOLIN-ECLIPSE" in result.answer

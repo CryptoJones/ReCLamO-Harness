@@ -113,8 +113,10 @@ class RLMConfig:
     exec_timeout: float = 120.0  # one REPL exec, seconds
     subcall_timeout: float = 300.0  # one llm_query/rlm_query, seconds
     max_errors: int = 3  # consecutive REPL errors before giving up
+    max_tokens_total: int | None = None  # whole run, prompt + completion; None = no limit
     max_retries: int = 3  # HTTP retries per LM call
     retry_backoff: float = 1.0  # seconds; doubles each retry
+    sft_log: bool = False  # also write sft.jsonl (one line per root turn)
     root: ModelConfig
     sub: ModelConfig
 
