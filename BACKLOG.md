@@ -7,7 +7,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ### Epic: ReCLamO v0.1 — Qwen-tuned RLM harness ([#8](https://github.com/CryptoJones/ReCLamO-Harness/issues/8))
 
-- [ ] Scaffold: pyproject, CI, README, NOTICE, BACKLOG, `reclamo --version` ([#1](https://github.com/CryptoJones/ReCLamO-Harness/issues/1))
+- [x] Scaffold: pyproject, CI, README, NOTICE, BACKLOG, `reclamo --version` ([#1](https://github.com/CryptoJones/ReCLamO-Harness/issues/1)) — PR [#9](https://github.com/CryptoJones/ReCLamO-Harness/pull/9)
 - [ ] Qwen-aware OpenAI-compatible client + config profiles + `reclamo ping` ([#2](https://github.com/CryptoJones/ReCLamO-Harness/issues/2))
 - [ ] Parsing + Qwen-tuned prompts ([#3](https://github.com/CryptoJones/ReCLamO-Harness/issues/3))
 - [ ] Subprocess REPL worker + stdio protocol ([#4](https://github.com/CryptoJones/ReCLamO-Harness/issues/4))
@@ -17,6 +17,6 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ## Done
 
-(nothing yet)
+- [x] Scaffold: pyproject, CI, README, NOTICE, BACKLOG, `reclamo --version` ([#1](https://github.com/CryptoJones/ReCLamO-Harness/issues/1)) — merged in PR [#9](https://github.com/CryptoJones/ReCLamO-Harness/pull/9)
 
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*
