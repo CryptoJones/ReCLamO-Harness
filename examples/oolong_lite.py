@@ -147,6 +147,11 @@ def _fill(template: str, rng: random.Random) -> str:
     )
 
 
+def ticket_text(category: str, rng: random.Random) -> str:
+    """One filled-in paraphrase for ``category`` (shared with ``nested.py``)."""
+    return _fill(rng.choice(TEMPLATES[category]), rng)
+
+
 def _banned_pattern() -> re.Pattern[str]:
     words = {w for ws in BANNED.values() for w in ws}
     for cat in CATEGORIES:
@@ -173,7 +178,7 @@ def generate_tickets(n: int = 300, seed: int = 0) -> tuple[list[Ticket], dict[st
     truth = dict.fromkeys(CATEGORIES, 0)
     for i in range(1, n + 1):
         category = rng.choices(CATEGORIES, weights=weights)[0]
-        text = _fill(rng.choice(TEMPLATES[category]), rng)
+        text = ticket_text(category, rng)
         tickets.append(Ticket(i, category, text))
         truth[category] += 1
     check_tickets(tickets)

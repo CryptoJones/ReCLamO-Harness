@@ -209,10 +209,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         print(result.answer)
         if logger.path:
+            child = f" (+{result.child_turns} child turns)" if result.child_turns else ""
             print(
-                f"[{result.stop_reason}; {result.iterations} turns, {result.subcalls} sub-calls, "
-                f"{result.usage.total_tokens} tokens, {result.elapsed:.1f}s; "
-                f"trajectory: {logger.path}]",
+                f"[{result.stop_reason}; {result.iterations} turns{child}, "
+                f"{result.subcalls} sub-calls, {result.usage.total_tokens} tokens, "
+                f"{result.elapsed:.1f}s; trajectory: {logger.path}]",
                 file=sys.stderr,
             )
     return EXIT_OK

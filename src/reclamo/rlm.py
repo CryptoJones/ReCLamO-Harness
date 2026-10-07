@@ -90,6 +90,7 @@ class RLMResult:
     stop_reason: str  # final | final_var | answer_dict | max_iterations
     trajectory_path: str | None
     depth: int = 0
+    child_turns: int = 0  # root turns taken by nested RLMs (depth >= 1), whole run
 
 
 @dataclass
@@ -102,6 +103,7 @@ class RunBudget:
     started: float = field(default_factory=time.monotonic)
     subcalls: int = 0
     subcall_chars: int = 0
+    child_turns: int = 0  # root-role turns taken at depth >= 1
     usage: Usage = field(default_factory=Usage)
 
     def add(self, completion: Completion) -> None:
@@ -207,6 +209,9 @@ class RLM:
 
         for i in range(1, n + 1):
             iterations = i
+            if self.depth > 0:
+                assert self._budget is not None
+                self._budget.child_turns += 1
             self._check_limits(repl, answer_state)
             self._maybe_compact(history, kinds, repl, i)
             self._turn_max_prompt = 0
@@ -473,6 +478,7 @@ class RLM:
             stop_reason=reason,
             iterations=iterations,
             subcalls=self._budget.subcalls,
+            child_turns=self._budget.child_turns,
             usage=dataclasses.asdict(self._budget.usage),
             elapsed=round(elapsed, 3),
         )
@@ -486,6 +492,7 @@ class RLM:
             stop_reason=reason,
             trajectory_path=str(self.logger.path) if self.logger.path else None,
             depth=self.depth,
+            child_turns=self._budget.child_turns,
         )
 
     def _log_iteration(

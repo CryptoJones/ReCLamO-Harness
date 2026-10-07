@@ -164,12 +164,14 @@ def test_rlm_query_spawns_child_at_depth_two() -> None:
     child_query = lm.root_calls[1]["messages"][1]["content"]
     assert child_query.startswith("The context holds a task handed down by a parent process")
     assert result.subcalls == 1  # the rlm_query counted against the shared budget
+    assert result.child_turns == 1 and result.iterations == 2  # child turns are kept apart
 
 
 def test_rlm_query_falls_back_to_llm_query_at_max_depth() -> None:
     result, lm = _run(["```repl\nr = rlm_query('deep question')\n```", "FINAL_VAR(r)"])
     assert result.answer.startswith("sub:deep question")
     assert len(lm.root_calls) == 2 and len(lm.sub_calls) == 1
+    assert result.child_turns == 0
 
 
 def test_child_subcalls_count_against_parent_budget() -> None:

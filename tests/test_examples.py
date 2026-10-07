@@ -188,3 +188,123 @@ def test_dump_prints_tickets_and_truth_without_a_model() -> None:
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.count("Ticket ") == 12
     assert "truth: " in proc.stdout
+
+
+# --- nested ---------------------------------------------------------------------
+
+nested = importlib.import_module("nested")
+
+
+def _reference_truth(log: str, fmt: str) -> tuple[int, dict[int, str]]:
+    """Replay a rendered log independently of the generator's specs."""
+    import json as _json
+
+    last: dict[int, str] = {}
+    text: dict[int, str] = {}
+    for line in log.splitlines():
+        if fmt == "syslog":
+            m = re.match(r"\S+ TICKET-(\d+) (OPENED|CLOSED|REOPENED)(?: by \w+: (.*))?$", line)
+            if m:
+                last[int(m[1])] = m[2]
+                if m[3]:
+                    text[int(m[1])] = m[3]
+        elif fmt == "chat":
+            m = re.match(r"\[[^\]]+\] (open|close|reopen) #(\d+)(?: \(\w+\) -- (.*))?$", line)
+            if m:
+                last[int(m[2])] = m[1]
+                if m[3]:
+                    text[int(m[2])] = m[3]
+        elif fmt == "json":
+            rec = _json.loads(line)
+            if rec["event"] in ("open", "close", "reopen"):
+                last[rec["id"]] = rec["event"]
+                if "text" in rec:
+                    text[rec["id"]] = rec["text"]
+        else:
+            m = re.match(r"ts=\S+ evt=(new|done|again) id=(\d+)(?: user=\w+ msg=\"(.*)\")?$", line)
+            if m:
+                last[int(m[2])] = m[1]
+                if m[3]:
+                    text[int(m[2])] = m[3]
+    unresolved = {i for i, ev in last.items() if ev not in ("CLOSED", "close", "done")}
+    return len(unresolved), {i: text[i] for i in unresolved}
+
+
+def test_nested_rendered_logs_agree_with_truth() -> None:
+    depts = nested.generate(8, 12_000, seed=3)
+    context = nested.build_context(depts)
+    truth, most = nested.build_truth(depts)
+    assert set(context) == set(truth) and len(truth) == 8
+    assert all(len(log) >= 12_000 for log in context.values())
+    assert {d.fmt for d in depts} == set(nested.FORMATS)
+    for d in depts:
+        n_unresolved, texts = _reference_truth(context[d.name], d.fmt)
+        assert n_unresolved == d.unresolved, d.name
+        by_id = {t.id: t for t in d.tickets}
+        damaged = sum(1 for i in texts if by_id[i].category == nested.TARGET)
+        assert damaged == truth[d.name], d.name
+        assert all(by_id[i].text == text for i, text in texts.items())
+    counts = list(truth.values())
+    assert counts.count(max(counts)) == 1 and truth[most] == max(counts)
+
+
+def test_nested_is_deterministic_and_grep_proof() -> None:
+    a = nested.build_context(nested.generate(4, 8_000, seed=11))
+    b = nested.build_context(nested.generate(4, 8_000, seed=11))
+    assert a == b
+    assert a != nested.build_context(nested.generate(4, 8_000, seed=12))
+    depts = nested.generate(6, 8_000, seed=11)
+    nested.check(depts)  # raises on a category word in any ticket text
+    words = {w for ws in oolong.BANNED.values() for w in ws}
+    pattern = re.compile(r"\b(" + "|".join(map(re.escape, sorted(words))) + r")\b", re.I)
+    for d in depts:
+        for t in d.tickets:
+            assert not pattern.search(t.text), (d.name, t.text)
+    assert "damaged item" in nested.build_query() and "Department: count" in nested.build_query()
+
+
+def test_nested_default_size_is_large() -> None:
+    depts = nested.generate(12, 25_000, seed=0)
+    assert sum(len(v) for v in nested.build_context(depts).values()) >= 300_000
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Accounts: 3\nLegal: 7\nmost: Legal",
+        "- **Accounts** – 3\n- Legal -> 7\n\nmost: **Legal**",
+        "Accounts: 3, Legal: 7. Most: legal",
+    ],
+)
+def test_nested_score_parses_counts_and_most(answer: str) -> None:
+    truth = {"Accounts": 3, "Legal": 7}
+    predicted, errors, total, most_predicted, ok = nested.score(answer, truth, "Legal")
+    assert predicted == truth and total == 0 and errors == {"Accounts": 0, "Legal": 0}
+    assert most_predicted == "Legal" and ok
+
+
+def test_nested_score_missing_most_and_wrong_counts() -> None:
+    truth = {"Accounts": 3, "Legal": 7}
+    predicted, errors, total, most_predicted, ok = nested.score(
+        "Accounts: 5\nLegal: 7", truth, "Legal"
+    )
+    assert predicted == {"Accounts": 5, "Legal": 7} and total == 2
+    assert most_predicted is None and not ok
+    assert nested.parse_most("most: Nowhere", ["Accounts"]) is None
+
+
+def test_nested_help_and_dump_run_without_a_model() -> None:
+    proc = subprocess.run(
+        [sys.executable, str(EXAMPLES / "nested.py"), "--help"], capture_output=True, text=True
+    )
+    assert proc.returncode == 0 and "--max-depth" in proc.stdout
+    proc = subprocess.run(
+        [sys.executable, str(EXAMPLES / "nested.py"), "--dump", "--departments", "3",
+         "--chars", "3000", "--seed", "4"],
+        capture_output=True,
+        text=True,
+        env={"PATH": "/usr/bin:/bin", "RECLAMO_API_KEY": ""},
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("===== ") == 3
+    assert "truth: " in proc.stdout and "most: " in proc.stdout
