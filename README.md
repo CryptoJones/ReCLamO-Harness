@@ -173,10 +173,17 @@ REPL, never written to a trajectory, and never included in an error message.
   `--max-depth`, `--delegate` (tell the model to use `rlm_query` per department),
   `--max-timeout`, `--dump`, `--json`.
 
+- `examples/longdoc_qa.py` — two-hop questions over a long synthetic engineering digest:
+  each project's owner and that person's office city sit in different sections among
+  distractors, so answering needs two hops of reading. Exact-match on the city.
+- `examples/bench.py` — the repeatable benchmark: harness vs plain model, N seeds over a
+  task × size grid, resumable (`--resume`), with a markdown summary (`--summary-only`).
+
 ```sh
 uv run python examples/needle.py --profile pluto --lines 1000000
 uv run python examples/oolong_lite.py --profile pluto --tickets 300
 uv run python examples/eval.py --profile pluto
+uv run python examples/bench.py --profile pluto --seeds 3
 uv run python examples/nested.py --profile pluto --max-depth 2 --delegate --max-timeout 900
 ```
 
@@ -205,6 +212,73 @@ Notes:
   is the over-calling failure the RLM paper reports for Qwen3-Coder (hundreds of calls
   per task), held off here by the batching instruction plus hard caps in code.
 - One run per task; treat these as smoke results, not a benchmark.
+
+### Benchmark: harness vs plain model, 3 seeds
+
+[#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19). `examples/bench.py
+--profile pluto --seeds 3`, run 2026-10-07 against the same server and default profile
+as above. Raw rows: `runs/bench-20261007T094811Z.json` (not in git).
+
+What each mode means:
+
+- **rlm** is the harness.
+- **plain** is one chat call with the whole context in the prompt.
+- **does not fit** means the plain prompt would not fit pluto's usable window, so the
+  plain model cannot attempt the task. The usable window is 28,672 tokens: 32K resident
+  KV minus an output reserve.
+
+The token estimate counts one token per digit and 3.5 characters per token otherwise.
+Each plain run is the better of two variants, so the baseline is not penalised by a
+cut-off: thinking on with a 16K output cap, and thinking off.
+
+| Task | Size | Mode | Result over 3 seeds | Median s | Median sub-calls |
+|---|---|---|---|---|---|
+| needle | 2,000 lines | rlm | 3/3 found | 13.7 | 0 |
+| needle | 2,000 lines | plain | 3/3 found | 0.6 | – |
+| needle | 10,000 lines | rlm | 3/3 found | 13.2 | 0 |
+| needle | 10,000 lines | plain | does not fit (~74K tokens) | – | – |
+| needle | 100,000 lines | rlm | 3/3 found | 16.3 | 0 |
+| needle | 100,000 lines | plain | does not fit (~1.5M tokens) | – | – |
+| needle | 1,000,000 lines | rlm | 3/3 found | 15.9 | 0 |
+| needle | 1,000,000 lines | plain | does not fit (~16M tokens) | – | – |
+| oolong_lite | 100 tickets | rlm | exact 3/3 | 84 | 4 |
+| oolong_lite | 100 tickets | plain | exact 3/3 | 85 | – |
+| oolong_lite | 300 tickets | rlm | exact 3/3 | 117 | 3 |
+| oolong_lite | 300 tickets | plain | exact 3/3 | 292 | – |
+| oolong_lite | 1,000 tickets | rlm | exact 2/3; one seed off by 34 | 380 | 16 |
+| oolong_lite | 1,000 tickets | plain | 2 of 3 do not fit; the one that fit was wrong (total error 360) | – | – |
+| longdoc_qa | 100 sections | rlm | 9/9 questions | 38 | 0 |
+| longdoc_qa | 100 sections | plain | 9/9 questions | 82 | – |
+| longdoc_qa | 300 sections | rlm | 9/9 questions | 80 | 0 |
+| longdoc_qa | 300 sections | plain | does not fit (~53K tokens) | – | – |
+
+Findings:
+
+- **Where the context fits, the plain model is just as accurate.** At 100 and 300
+  tickets, the 100-section QA and the 2,000-line needle, plain was exact every time. The
+  harness is not smarter on small inputs.
+- **Where it doesn't fit, only the harness can answer.** That covers the needle from
+  10K to 1M lines, 1,000 tickets and 300 sections. The harness found the needle all 12
+  times at up to ~16M estimated tokens, in about 16 s each. It answered all 18 QA
+  questions and got 1,000 tickets exact on 2 of 3 seeds.
+- **The harness is often faster even when plain fits.** It took 117 s against 292 s at
+  300 tickets, and 38 s against 82 s on the 100-section QA. It keeps the root prompt
+  small instead of thinking over the whole document in one call. The exception is the
+  tiny needle, where plain answers in under a second.
+- **The first plain baseline was unfair.** Two of its three 100-ticket failures were
+  cut-offs: thinking ran into the output limit. The best-of-two rule above replaced it.
+  With the rule in place, plain is 3/3.
+- **Sub-calls stayed small.** 0 to 16 per run. 16 was at 1,000 tickets, still about 60
+  tickets per call rather than one per ticket.
+- **The one miss** was oolong_lite at 1,000 tickets, seed 2, total error 34. The other
+  two seeds were exact. This is the size where per-batch classification errors start to
+  add up.
+- **Caveats.** These are synthetic tasks written by the harness's authors. See
+  [#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22) and
+  `evals/independent/` for the tests written by others. A `plain_truncated` mode (the
+  head of the context, cut to fit) exists in `bench.py` but is not reported: an early
+  version under-estimated digit-heavy text and sent prompts too long for the 300 s
+  request timeout. It is fixed, but has not been re-run.
 
 ### Depth-2 recursion
 
