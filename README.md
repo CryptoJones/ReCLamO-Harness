@@ -2,6 +2,8 @@
 
 # ReCLamO-Harness
 
+> 📝 **Background reading:** [*Mismanaged Geniuses*](https://cryptojones.dev/Mismanaged-Geniuses/) — why recursive language models matter, from Alex Zhang's interview on RLMs.
+
 An open-source Recursive Language Model (RLM) harness, written for the Qwen model
 served by Strata on `pluto`. Apache-2.0.
 
