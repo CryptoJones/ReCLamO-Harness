@@ -53,6 +53,8 @@ markers = [
 line-length = 100
 target-version = "py311"
 src = ["src", "tests"]
+# Third-party eval generators are kept byte-for-byte as their authors wrote them.
+extend-exclude = ["evals/independent"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]

@@ -1,0 +1,132 @@
+{
+  "created": "2026-10-07",
+  "brief": "BRIEF.md",
+  "brief_sha256": "55c1dee309cfb7b51af1095fd76a8d63e41687e838e7e0838804ad095a90dfaa",
+  "excluded_lanes": {
+    "Proteus": "Qwen 3.7 Flash - same model family as the system under test",
+    "HAL9000": "Anthropic",
+    "Cortana": "Anthropic"
+  },
+  "generators": {
+    "GLaDOS": {
+      "vendor": "xai",
+      "model": "grok-4.6",
+      "harness": "cli (grok)",
+      "status": "pass",
+      "task": "Transit co-op public-records dump: net authorized amount and certifying member for the current legal successor of a renamed project, applying bylaws/SOP and ignoring informal commentary.",
+      "file": "generators/GLaDOS.py",
+      "sha256": "39233a93cfe4b00398fd805d27bc53855e0f0ee0e48b5c63184c894cef56e7a8",
+      "chars": {
+        "small": 60005,
+        "medium": 300021,
+        "large": 1200079
+      },
+      "self_test_exit": 0
+    },
+    "SHODAN": {
+      "vendor": "openai",
+      "model": "gpt-6-astra",
+      "harness": "cli (codex)",
+      "status": "pass",
+      "task": "May closing packet: per-office earned freight credits after signed corrections, custody findings and agreement terms.",
+      "file": "generators/SHODAN.py",
+      "sha256": "90568550c9f8528231f31be480e1b45b6b430af8eb04b5a95c6dc7ca9b0b9393",
+      "chars": {
+        "small": 60070,
+        "medium": 301744,
+        "large": 1201259
+      },
+      "self_test_exit": 0
+    },
+    "TheDixieFlatline": {
+      "vendor": "google",
+      "model": "gemini-3.1-pro-high",
+      "harness": "cli (agy)",
+      "status": "pass",
+      "task": "Chain-of-custody audit: final physical location of an asset through renames, transfers and corrections. Note: medium size is ~260K chars (brief asked ~300K); the true room name also appears among many distractor rooms.",
+      "file": "generators/TheDixieFlatline.py",
+      "sha256": "8b933ab47285cc65522b8741b3b3494234a72010ace7f973684ea100f13a5fbd",
+      "chars": {
+        "small": 53941,
+        "medium": 260233,
+        "large": 1072099
+      },
+      "self_test_exit": 0
+    },
+    "Cerebex": {
+      "vendor": "z-ai",
+      "model": "glm-5.3-flash",
+      "harness": "http (OpenRouter)",
+      "status": "defect: scorer",
+      "task": "Expense-reimbursement email archive: total travel-category USD after amendments and reversals. Own self-test fails: score() gives a deliberately wrong answer 1.0.",
+      "file": "generators/Cerebex.py",
+      "sha256": "104f7fe8bd502a274091c18932f05014179c92e1ebca9de9928d254b1eb51f4a",
+      "chars": {
+        "small": 60685,
+        "medium": 302976,
+        "large": 1211887
+      },
+      "self_test_exit": 1
+    },
+    "Neuromancer": {
+      "vendor": "deepseek",
+      "model": "deepseek-v4-flash",
+      "harness": "http (OpenRouter)",
+      "status": "defect: small size + scorer",
+      "task": "Total March travel reimbursed after adjustments, excluding denials. Small size degenerates to $0.00 truth and score() accepts '$0.00'/missing '$' as correct; medium/large produce non-trivial truths.",
+      "file": "generators/Neuromancer.py",
+      "sha256": "69d93f89c0bcb5737071a5abc722edaa049cf0ca74895929bbc10f194fabcbf8",
+      "chars": {
+        "small": 55022,
+        "medium": 295027,
+        "large": 1195055
+      },
+      "self_test_exit": 1
+    },
+    "SELMA": {
+      "vendor": "nvidia",
+      "model": "nemotron-3-super-120b-a12b:free",
+      "harness": "http (OpenRouter)",
+      "status": "defect: non-deterministic",
+      "task": "Email thread: final owner of the AI Ethics Review after reassignments. Output differs across processes (depends on PYTHONHASHSEED), violating the determinism requirement; deterministic within one process.",
+      "file": "generators/SELMA.py",
+      "sha256": "bade901b341924c37563945b924b476d1ba84d236d329696566637498591c8ed",
+      "chars": {
+        "small": 60155,
+        "medium": 300197,
+        "large": 1200021
+      },
+      "self_test_exit": 0
+    },
+    "MasterControl": {
+      "vendor": "mistral",
+      "model": "mistral-medium-3.1",
+      "harness": "http (OpenRouter)",
+      "status": "defect: scorer",
+      "task": "Final audit summary: the only employee flagged for two specific issues and their flagged total. score(str(truth), truth) == 0.5 - the scorer cannot parse its own tuple truth.",
+      "file": "generators/MasterControl.py",
+      "sha256": "cfd84bb4b5503916ab95f745b3d8ad46887051cfc01433e7ee5d16d983e66290",
+      "chars": {
+        "small": 61826,
+        "medium": 300468,
+        "large": 1200856
+      },
+      "self_test_exit": 1
+    },
+    "Multivac": {
+      "vendor": "nousresearch",
+      "model": "hermes-4-405b",
+      "harness": "http (OpenRouter)",
+      "status": "defect: size",
+      "task": "Requirements log with merges/splits: current status and description of a requirement. Contexts are 2.7K/6K/16K chars instead of ~60K/300K/1.2M.",
+      "file": "generators/Multivac.py",
+      "sha256": "87e1a66dfc9e4113ad80972fa15f97d272d1a2746523a8614d54dad9d8e0c512",
+      "chars": {
+        "small": 2720,
+        "medium": 6068,
+        "large": 15836
+      },
+      "self_test_exit": 0
+    }
+  }
+}
