@@ -99,6 +99,20 @@ def test_plan_like_final_rejected_then_accepted_on_repeat() -> None:
     assert "reads like a plan" in lm.root_calls[1]["messages"][-1]["content"]
 
 
+@pytest.mark.parametrize("final", ["FINAL_VAR(answer['content'])", 'FINAL(answer["content"])'])
+def test_final_var_of_answer_content_uses_the_answer_dict(final: str) -> None:
+    """Seen live: the dict was filled without ready=True, then named in FINAL_VAR."""
+    result, lm = _run(["```repl\nanswer['content'] = 'Legal: 7'\n```", final])
+    assert (result.answer, result.stop_reason, result.iterations) == ("Legal: 7", "answer_dict", 2)
+    assert len(lm.root_calls) == 2
+
+
+def test_final_var_of_unset_answer_content_rejected() -> None:
+    result, lm = _run(["FINAL_VAR(answer['content'])", "FINAL(ok)"])
+    assert result.answer == "ok"
+    assert "`answer['content']` has not been set" in lm.root_calls[1]["messages"][-1]["content"]
+
+
 def test_missing_final_var_rejected() -> None:
     result, lm = _run(["FINAL_VAR(nothing)", "FINAL(ok)"])
     assert result.answer == "ok"
@@ -165,6 +179,59 @@ def test_rlm_query_spawns_child_at_depth_two() -> None:
     assert child_query.startswith("The context holds a task handed down by a parent process")
     assert result.subcalls == 1  # the rlm_query counted against the shared budget
     assert result.child_turns == 1 and result.iterations == 2  # child turns are kept apart
+
+
+def test_rlm_query_with_data_gives_the_child_that_context_and_question() -> None:
+    cfg = _cfg(max_depth=2)
+    root = [
+        "```repl\nr = rlm_query('How many lines? Reply with the number.', context[:8])\n"
+        "print(r)\n```",
+        "```repl\nn = len(context.splitlines())\n```",  # child turn 1: context is 'line one'
+        "FINAL_VAR(n)",  # child turn 2
+        "FINAL_VAR(r)",
+    ]
+    result, lm = _run(root, cfg=cfg)
+    assert result.answer == "1"
+    assert result.subcalls == 1 and result.child_turns == 2 and result.iterations == 2
+    child_system = lm.root_calls[1]["messages"][0]["content"]
+    assert "`context` is a str of 8 characters" in child_system
+    child_query = lm.root_calls[1]["messages"][1]["content"]
+    assert child_query.startswith("How many lines? Reply with the number.\n\nTurn 1/5.")
+
+
+def test_rlm_query_with_dict_data_and_logged_sizes(tmp_path: Path) -> None:
+    cfg = _cfg(max_depth=2)
+    logger = TrajectoryLogger(tmp_path)
+    lm = MockLM(
+        [
+            "```repl\nr = rlm_query('Which key is longest?', {'a': 'xx', 'b': 'yyyy'})\n```",
+            "FINAL(b)",
+            "FINAL_VAR(r)",
+        ]
+    )
+    result = RLM(_cfg(max_depth=2), lm, logger=logger).completion(CONTEXT, "q")
+    assert result.answer == "b" and cfg.max_depth == 2
+    assert (
+        "`context` is a dict with 2 keys of 6 characters"
+        in lm.root_calls[1]["messages"][0]["content"]
+    )
+    records = [json.loads(line) for line in logger.path.read_text().splitlines()]
+    sub = [r for r in records if r["type"] == "subcall"]
+    assert (
+        sub[0]["ran_as"] == "rlm_query"
+        and sub[0]["prompt_chars"] == len("Which key is longest?") + 6
+    )
+    metas = [r for r in records if r["type"] == "metadata"]
+    assert [m["depth"] for m in metas] == [0, 1] and metas[1]["query"] == "Which key is longest?"
+
+
+def test_rlm_query_with_data_flattens_to_llm_query_at_max_depth() -> None:
+    result, lm = _run(
+        ["```repl\nr = rlm_query('Count the lines.', context[:8])\n```", "FINAL_VAR(r)"]
+    )
+    assert len(lm.sub_calls) == 1 and result.child_turns == 0
+    assert lm.sub_calls[0]["messages"][0]["content"] == "Count the lines.\n\nline one"
+    assert result.answer.startswith("sub:Count the lines.")
 
 
 def test_rlm_query_falls_back_to_llm_query_at_max_depth() -> None:

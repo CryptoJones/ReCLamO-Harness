@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Protocol
 
-# (kind, prompts) -> answers, one per prompt. kind is "llm_query",
-# "llm_query_batched" or "rlm_query". It may raise; the REPL turns that into
-# an exception inside the model's code.
-LLMHandler = Callable[[str, list[str]], list[str]]
+
+class LLMHandler(Protocol):
+    """``(kind, prompts[, contexts]) -> answers``, one answer per prompt.
+
+    ``kind`` is "llm_query", "llm_query_batched" or "rlm_query". ``contexts``
+    is only passed for ``rlm_query(question, data)``: one data object per
+    prompt, which becomes the nested RLM's own ``context``. The handler may
+    raise; the REPL turns that into an exception inside the model's code.
+    """
+
+    def __call__(
+        self, kind: str, prompts: list[str], contexts: list[Any] | None = None, /
+    ) -> list[str]: ...
 
 
 @dataclass

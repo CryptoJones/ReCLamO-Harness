@@ -42,9 +42,12 @@ def test_rlm_query_omitted_at_depth_one() -> None:
 
 def test_rlm_query_included_at_depth_two_with_guidance() -> None:
     prompt = build_system_prompt(PromptSettings(max_depth=2), META)
-    assert "rlm_query(prompt: str)" in prompt
+    assert "rlm_query(question: str, data)" in prompt
     assert "own REPL" in prompt
     assert "`llm_query` is faster" in prompt
+    assert "Three ways to decompose" in prompt
+    assert "rlm_query(question, text) for name, text in context.items()" in prompt
+    assert "Delegate" not in build_system_prompt(PromptSettings(max_depth=1), META)
 
 
 def test_prompt_contains_batching_warning() -> None:

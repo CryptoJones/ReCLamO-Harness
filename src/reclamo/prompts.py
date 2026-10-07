@@ -60,10 +60,14 @@ def _tools_section(subcall_chars: int, recursive: bool) -> str:
     ]
     if recursive:
         lines.append(
-            "- `rlm_query(prompt: str) -> str`: like `llm_query`, but the callee gets its "
-            "own REPL and can run code and make sub-calls of its own. Use it only when a "
-            "sub-task needs real iteration (search, then refine). For a plain 'read this "
-            "and answer' task, `llm_query` is faster and more reliable."
+            "- `rlm_query(question: str, data) -> str`: start a nested copy of this whole "
+            "loop on `data` (a str, list or dict, such as one value of `context`). It gets "
+            "`data` as its own `context`, works in turns with its own REPL and sub-calls, "
+            "and returns its final answer. Use it when `context` splits into large "
+            "independent parts (one per key, section or file) that each need their own "
+            "inspection and iteration; give each child a precise question and ask for a "
+            "short, parseable answer. For a plain 'read this and answer' task, `llm_query` "
+            "is faster and more reliable."
         )
     return "\n".join(lines)
 
@@ -86,10 +90,22 @@ def _batching_section(subcall_chars: int, concurrency: int = 1) -> str:
     )
 
 
-def _examples_section(subcall_chars: int) -> str:
-    return (
-        "## Two ways to decompose\n"
+def _examples_section(subcall_chars: int, recursive: bool = False) -> str:
+    recursion = (
+        "\n\n"
+        "Delegate, when the parts are large and independent and recursion is allowed:\n"
         "\n"
+        "```repl\n"
+        "question = 'How many lines of this log mention a refund? Reply with just the number.'\n"
+        "per_part = {name: rlm_query(question, text) for name, text in context.items()}\n"
+        "print(per_part)\n"
+        "```"
+        if recursive
+        else ""
+    )
+    heading = "## Three ways to decompose\n" if recursive else "## Two ways to decompose\n"
+    return (
+        heading + "\n"
         "Chunk and map, for data with no natural structure:\n"
         "\n"
         "```repl\n"
@@ -108,7 +124,7 @@ def _examples_section(subcall_chars: int) -> str:
         "sections = re.split(r'(?m)^## ', context)[1:]\n"
         "summaries = llm_query_batched([f'Summarize in one line:\\n\\n{s}' for s in sections])\n"
         "print(len(sections), 'sections; first summary:', summaries[0][:200])\n"
-        "```"
+        "```" + recursion
     )
 
 
@@ -162,7 +178,7 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
         context_meta.render(),
         _tools_section(subcall_chars, recursive),
         _batching_section(subcall_chars, concurrency),
-        _examples_section(subcall_chars),
+        _examples_section(subcall_chars, recursive),
         _rules_section(),
     ]
     return "\n\n".join(parts) + "\n"

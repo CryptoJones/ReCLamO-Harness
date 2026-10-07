@@ -241,8 +241,14 @@ class ProcessREPL(REPL):
     def _handle_llm_request(self, msg: dict[str, Any]) -> dict[str, Any]:
         kind = str(msg.get("kind") or "llm_query")
         prompts = [str(p) for p in (msg.get("prompts") or [])]
+        contexts = msg.get("contexts")
         try:
-            answers = [str(a) for a in self._handler(kind, prompts)]
+            if contexts is None:
+                answers = [str(a) for a in self._handler(kind, prompts)]
+            else:
+                if not isinstance(contexts, list) or len(contexts) != len(prompts):
+                    raise ValueError("rlm_query: one data object per prompt is required")
+                answers = [str(a) for a in self._handler(kind, prompts, contexts)]
             if len(answers) != len(prompts):
                 raise ValueError(
                     f"handler returned {len(answers)} answers for {len(prompts)} prompts"
