@@ -31,26 +31,155 @@ sub-calls, and a prompt sized for the 32K of KV cache that stays resident on plu
 
 ## Status
 
-**Pre-alpha.** Work is tracked in epic
+**Pre-alpha, usable.** Work is tracked in epic
 [#8](https://github.com/CryptoJones/ReCLamO-Harness/issues/8) and mirrored in
-[BACKLOG.md](BACKLOG.md). Right now the package installs and `reclamo --version`
-works; nothing else does yet.
+[BACKLOG.md](BACKLOG.md). `reclamo ping` and `reclamo run` work end to end against
+pluto; the Docker sandbox and the live eval are the remaining children.
 
-## Quickstart (coming)
-
-The target interface, against the `pluto` profile. Not yet implemented.
+## Quickstart
 
 ```sh
 uv sync
 uv run reclamo ping --profile pluto
-uv run reclamo run --profile pluto --context ./big.txt --query "Which line holds the needle?"
+uv run reclamo run --profile pluto --context ./big.txt -q "Which line holds the needle?"
 ```
 
-The `pluto` profile points at `http://pluto:8083/v1`, model `qwen3.8-flash-next`,
-reads the API key from `RECLAMO_API_KEY` or `pass pluto/flashnext-api-key`, and
-serialises calls (Strata serves one request at a time). Generated code runs in a
-subprocess REPL by default; `--sandbox docker` runs it in a container with
-`--network none`.
+`ping` lists the server's models, sends one short non-thinking request and one
+thinking request, and reports latency, token usage and whether reasoning came back.
+
+`run` loads the context into a REPL and drives the model until it answers:
+
+| Flag | Meaning |
+|---|---|
+| `--context PATH\|-` | a text file; a directory (loaded as `{relative path: text}`, hidden and non-UTF-8 files skipped); or `-` for stdin |
+| `-q, --query` | the question |
+| `--max-depth N` | recursion depth; default 1 (the paper found Qwen gets worse at depth 2+) |
+| `--max-iterations N` | root turns before a forced finish; default 20 |
+| `--log-dir DIR` | where trajectories go; default `runs/` |
+| `--verbose` | print each turn (response, code, output) to stderr |
+| `--no-thinking` | disable thinking on root turns |
+| `--json` | print the full result (answer, turns, sub-calls, usage, stop reason, trajectory path) as JSON |
+| `--sft` | also write the SFT file (see below) |
+| `--sandbox {subprocess,docker}` | where generated code runs; `docker` arrives with [#6](https://github.com/CryptoJones/ReCLamO-Harness/issues/6) |
+
+Exit codes: `0` an answer was produced (including a forced finish when turns run out),
+`3` a limit stopped the run (timeout, consecutive REPL errors, token budget; any
+partial answer is printed), `2` configuration or key errors, `1` the endpoint failed.
+
+### Profiles
+
+Two profiles are built in. `pluto` points at `http://pluto:8083/v1`, model
+`qwen3.8-flash-next`, with Qwen's recommended sampling for thinking (root) and
+non-thinking (sub-call) turns, `concurrency = 1` (Strata serves one request at a
+time) and `context_tokens = 32768` (the KV cache that stays resident).
+`openai-compatible` is a generic profile for any OpenAI-style server.
+
+Add or override profiles in `~/.config/reclamo/profiles.toml` (or the file named by
+`RECLAMO_PROFILES`). Fields you leave out keep the built-in values:
+
+```toml
+[profiles.pluto]
+max_iterations = 30          # override one field of a built-in profile
+
+[profiles.lab]               # a new profile
+base_url = "http://lab:8000/v1"
+concurrency = 2
+context_tokens = 65536
+subcall_chars = 16000        # how much text the prompt tells the model to batch per sub-call
+max_subcalls_per_run = 64
+max_subcalls_per_exec = 24
+exec_timeout = 120.0         # seconds per REPL execution
+max_timeout = 1800.0         # seconds for the whole run
+
+[profiles.lab.root]          # the loop's own turns
+model = "qwen3-32b"
+max_tokens = 4096
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0 }
+
+[profiles.lab.sub]           # llm_query calls
+model = "qwen3-32b"
+max_tokens = 2048
+enable_thinking = false
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
+```
+
+Environment overrides apply to any profile: `RECLAMO_BASE_URL`, `RECLAMO_MODEL`
+(sets both roles) and `RECLAMO_API_KEY`. When `RECLAMO_API_KEY` is unset the key
+comes from the profile's `api_key_cmd` (`pass pluto/flashnext-api-key` for pluto).
+Non-standard sampling keys such as `top_k` and `min_p` are sent in the request body,
+and `enable_thinking` goes out as `chat_template_kwargs`, which Strata and vLLM-style
+servers honour.
+
+### Trajectories and the SFT log
+
+Every run writes `runs/<UTC timestamp>-<id>.jsonl`, one JSON object per line:
+
+- `metadata` — profile (never the key), query, context shape, depth
+- `iteration` — turn number, the model's content, its reasoning as a separate field,
+  the code blocks, each block's result, any nudges, and the FINAL decision
+- `subcall` — depth, kind (`llm_query`, `llm_query_batched`, `rlm_query`), prompt and
+  answer sizes, latency, running count
+- `compaction` — when older REPL outputs were elided from the history
+- `forced_finish` and `final` — how the run ended
+
+Reasoning is logged but never fed back into the history, per Qwen's guidance. With
+`--sft` a second file, `<same stem>.sft.jsonl`, holds one line per root turn,
+`{"messages": <history before the turn>, "completion": <content>}`, the format the
+paper used to fine-tune RLM-Qwen3-8B.
+
+## Security model
+
+The model writes code, and that code runs. Two things keep that contained.
+
+**Subprocess REPL (default).** Generated code runs in a separate `python -I` process
+whose environment is scrubbed to `PATH`, `LANG`, `LC_ALL` and a throwaway `HOME` and
+`TMPDIR`. No `RECLAMO_*`, `OPENAI_*` or `*_API_KEY` variable reaches it. The worker's
+protocol stdio is duplicated to private descriptors before user code runs, and fd 0
+is pointed at `/dev/null` and fd 1 at stderr, so generated code (or anything it
+spawns) can neither read protocol messages nor corrupt the stream. Each execution
+has a wall-clock timeout; a hung or crashed worker is killed and relaunched, and the
+model is told its variables are gone. Sub-calls per execution and per run are capped
+in code, not just in the prompt.
+
+**Docker sandbox** (`--sandbox docker`, [#6](https://github.com/CryptoJones/ReCLamO-Harness/issues/6)).
+The same worker runs in `python:3.12-slim` with `--network none`, a read-only root
+filesystem, a small `/tmp`, no capabilities and a non-root user. The only channel out
+is the JSON-lines protocol on stdio, which is how `llm_query` still works with no
+network.
+
+**What the key can reach.** The API key lives only in the parent process and is used
+for one thing: requests to the configured LM endpoint. It is never passed to the
+REPL, never written to a trajectory, and never included in an error message.
+
+## Examples and eval
+
+- `examples/needle.py` — builds N synthetic lines (default 1,000,000, about 30 MB) with
+  one passphrase line and asks for the passphrase. Exit 0 when found.
+- `examples/oolong_lite.py` — about 300 synthetic support tickets in five categories,
+  written as paraphrases that never contain their category's words (asserted at
+  generation time), so grep cannot solve it and the model has to read, which means
+  batching tickets into `llm_query` calls. Scored by per-category absolute error.
+  `--dump` prints the tickets and the ground truth without calling a model.
+- `examples/eval.py` — runs both against a profile, writes `runs/eval-<timestamp>.json`
+  and prints the markdown table used below.
+
+```sh
+uv run python examples/needle.py --profile pluto --lines 1000000
+uv run python examples/oolong_lite.py --profile pluto --tickets 300
+uv run python examples/eval.py --profile pluto
+```
+
+Live tests (`uv run pytest -m live`) run `ping`, a thinking round trip and a
+50K-line needle against pluto; they are skipped by default and in CI.
+
+## Results
+
+Filled in from `examples/eval.py` output against pluto.
+
+| Task | Result | Turns | Sub-calls | Tokens | Seconds |
+|---|---|---|---|---|---|
 
 ## Development
 
