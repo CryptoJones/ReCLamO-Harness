@@ -215,3 +215,41 @@ def test_run_reports_non_final_stop_reason(
     captured = capsys.readouterr()
     assert rc == 0 and captured.out == "forced\n"
     assert "stopped by max_iterations; the answer may be incomplete" in captured.err
+
+
+def _tool_reply(name: str, arguments: str, call_id: str) -> dict:
+    body = chat_response(None, finish_reason="tool_calls")
+    body["choices"][0]["message"]["tool_calls"] = [
+        {"id": call_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+    ]
+    return body
+
+
+def test_run_protocol_tools_sends_tools_and_finishes_on_final_answer(
+    fake_server: FakeServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("RECLAMO_API_KEY", "sk-test-SECRET")
+    fake_server.script(
+        _tool_reply("execute_python", json.dumps({"code": "n = len(context)\nprint(n)"}), "c1"),
+        _tool_reply("final_answer", '{"variable": "n"}', "c2"),
+    )
+    profiles = _profiles_file(tmp_path, fake_server.base_url)
+    ctx = tmp_path / "ctx.txt"
+    ctx.write_text("hello world\n", encoding="utf-8")
+    rc = main(
+        ["run", "--profile", "fake", "--profiles", str(profiles), "--context", str(ctx),
+         "-q", "How long?", "--log-dir", str(tmp_path / "runs"), "--json",
+         "--protocol", "tools"]
+    )  # fmt: skip
+    result = json.loads(capsys.readouterr().out)
+    assert rc == 0 and result["answer"] == "12" and result["stop_reason"] == "final_var"
+    assert result["protocol"] == "tools"
+    posts = [r for r in fake_server.requests if r.method == "POST"]
+    assert posts[0].body["tool_choice"] == "auto"
+    assert posts[0].body["tools"][0]["function"]["name"] == "execute_python"
+    msgs = posts[1].body["messages"]
+    assert msgs[2]["tool_calls"][0]["id"] == "c1"
+    assert msgs[3] == {"role": "tool", "tool_call_id": "c1", "content": "12"}

@@ -28,6 +28,7 @@ PROFILES_ENV = "RECLAMO_PROFILES"
 BASE_URL_ENV = "RECLAMO_BASE_URL"
 MODEL_ENV = "RECLAMO_MODEL"
 DEFAULT_USER_PROFILES = Path("~/.config/reclamo/profiles.toml")
+PROTOCOLS = ("fence", "tools")
 
 # Qwen3 sampling presets from the model card; top_k and min_p are non-standard
 # parameters and travel to the server in the request body's top level via
@@ -121,8 +122,15 @@ class RLMConfig:
     max_retries: int = 3  # HTTP retries per LM call
     retry_backoff: float = 1.0  # seconds; doubles each retry
     sft_log: bool = False  # also write sft.jsonl (one line per root turn)
+    protocol: str = "fence"  # "fence" (```repl + FINAL) | "tools" (execute_python/final_answer)
     root: ModelConfig
     sub: ModelConfig
+
+    def __post_init__(self) -> None:
+        if self.protocol not in PROTOCOLS:
+            raise ConfigError(
+                f"protocol must be one of {', '.join(PROTOCOLS)}, not {self.protocol!r}"
+            )
 
     def role(self, role: str) -> ModelConfig:
         if role == "root":

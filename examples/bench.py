@@ -20,6 +20,12 @@ this file adds the grid, the modes and the bookkeeping:
 - ``plain_truncated`` (opt-in): the same call with the context cut to fit,
   clearly labelled; it shows what a window-limited model gets.
 
+``--protocol tools`` runs the ``rlm`` mode over execute_python / final_answer tool
+calls instead of fenced code (issue #20). Each rlm row records its ``protocol`` and
+the loop's ``stats`` (executions, syntax errors, final-answer rejections, protocol
+slips); tools rows are keyed and summarised as ``rlm:tools``, so both protocols can
+share one JSON file.
+
 Every row is written to the JSON as soon as it finishes, so a run can be
 interrupted and continued with ``--resume FILE``; rows already present
 (same task, size, mode and seed) are skipped. A markdown summary (mean
@@ -55,6 +61,8 @@ from reclamo.logger import TrajectoryLogger  # noqa: E402
 from reclamo.rlm import CHARS_PER_TOKEN, RLM  # noqa: E402
 
 MODES = ("rlm", "plain", "plain_truncated")
+# Summary order; "rlm:tools" is the rlm mode run with protocol="tools".
+MODE_LABELS = ("rlm", "rlm:tools", "plain", "plain_truncated")
 DEFAULT_MODES = ("rlm", "plain")
 DEFAULT_GRID: tuple[tuple[str, int], ...] = (
     ("oolong_lite", 100),
@@ -225,8 +233,9 @@ def run_rlm(cfg: RLMConfig, client: Any, inst: Instance, log_dir: str | None) ->
     spec = TASKS[inst.task]
     logger = TrajectoryLogger(log_dir)
     started = time.monotonic()
+    rlm = RLM(cfg, client, logger=logger)
     try:
-        result = RLM(cfg, client, logger=logger).completion(inst.context, inst.query)
+        result = rlm.completion(inst.context, inst.query)
     except RLMError as exc:
         answer = exc.partial_answer or ""
         scored = spec.score(answer, inst.truth)
@@ -242,6 +251,7 @@ def run_rlm(cfg: RLMConfig, client: Any, inst: Instance, log_dir: str | None) ->
             "stop_reason": "error",
             "error": f"{type(exc).__name__}: {exc}",
             "trajectory": str(logger.path) if logger.path else None,
+            "stats": json.loads(json.dumps(rlm._stats)),
         }
     except Exception as exc:  # endpoint or sandbox failure: record it, keep the run going
         return {
@@ -271,6 +281,7 @@ def run_rlm(cfg: RLMConfig, client: Any, inst: Instance, log_dir: str | None) ->
         "stop_reason": result.stop_reason,
         "error": None,
         "trajectory": result.trajectory_path,
+        "stats": result.stats,
     }
 
 
@@ -419,6 +430,7 @@ def run_row(
         "started_at": datetime.now(UTC).isoformat(timespec="seconds"),
     }
     if mode == "rlm":
+        row["protocol"] = cfg.protocol
         row.update(run_rlm(cfg, client, inst, log_dir))
     elif mode == "plain":
         row.update(run_plain(cfg, client, inst, truncated=False, plain_max_tokens=plain_max_tokens))
@@ -460,8 +472,14 @@ def parse_grid(specs: Iterable[str]) -> list[tuple[str, int]]:
     return grid
 
 
+def mode_label(mode: str, protocol: str | None = None) -> str:
+    """``rlm`` run with the tools protocol is its own column: ``rlm:tools``."""
+    return "rlm:tools" if mode == "rlm" and protocol == "tools" else mode
+
+
 def row_key(row: dict[str, Any]) -> tuple[str, int, str, int]:
-    return (row["task"], int(row["size"]), row["mode"], int(row["seed"]))
+    label = mode_label(row["mode"], row.get("protocol"))
+    return (row["task"], int(row["size"]), label, int(row["seed"]))
 
 
 def load_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -493,10 +511,15 @@ def run_grid(
     rows: list[dict[str, Any]],
     on_row: Callable[[dict[str, Any]], None] | None = None,
     log: Callable[[str], None] = lambda _msg: None,
+    protocol: str = "fence",
 ) -> list[dict[str, Any]]:
     """Run every cell not already in ``rows``; append each new row and call ``on_row``."""
     done = {row_key(r) for r in rows}
-    todo = [cell for cell in plan(grid, modes, seeds) if cell not in done]
+    todo = [
+        (task, size, mode, seed)
+        for task, size, mode, seed in plan(grid, modes, seeds)
+        if (task, size, mode_label(mode, protocol), seed) not in done
+    ]
     log(f"{len(todo)} rows to run, {len(done)} already present")
     for n, (task, size, mode, seed) in enumerate(todo, 1):
         log(f"[{n}/{len(todo)}] {task} {size} {mode} seed={seed} ...")
@@ -566,8 +589,9 @@ def _median(values: list[Any]) -> float | None:
 def summarize(rows: Iterable[dict[str, Any]]) -> list[Cell]:
     groups: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
     for row in rows:
-        groups.setdefault((row["task"], int(row["size"]), row["mode"]), []).append(row)
-    order = {m: i for i, m in enumerate(MODES)}
+        label = mode_label(row["mode"], row.get("protocol"))
+        groups.setdefault((row["task"], int(row["size"]), label), []).append(row)
+    order = {m: i for i, m in enumerate(MODE_LABELS)}
     task_order = {t: i for i, t in enumerate(TASKS)}
     cells: list[Cell] = []
     for (task, size, mode), group in sorted(
@@ -712,6 +736,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=PLAIN_MAX_TOKENS,
         help="output budget for plain calls, capped by what fits (default %(default)s)",
     )
+    parser.add_argument(
+        "--protocol",
+        choices=("fence", "tools"),
+        default="fence",
+        help="how the rlm mode acts: fenced code (default) or tool calls",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan; call no model")
     return parser
 
@@ -746,7 +776,7 @@ def main(argv: list[str] | None = None) -> int:
         from reclamo.config import load_config
 
         cfg = load_config(args.profile, args.profiles)
-        cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout)
+        cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout, protocol=args.protocol)
     except ConfigError as exc:
         print(f"bench: {exc}", file=err)
         return 2
@@ -789,7 +819,9 @@ def main(argv: list[str] | None = None) -> int:
         "updated": stamp,
     }
     meta.setdefault("batches", [])
-    meta["batches"].append({"at": stamp, "grid": grid, "modes": modes, "seeds": seeds})
+    meta["batches"].append(
+        {"at": stamp, "grid": grid, "modes": modes, "seeds": seeds, "protocol": cfg.protocol}
+    )
 
     def runner(task: str, size: int, mode: str, seed: int) -> dict[str, Any]:
         return run_row(
@@ -811,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
 
     write_rows(out, meta, rows)
     try:
-        run_grid(runner, grid, modes, seeds, rows=rows, on_row=save, log=log)
+        run_grid(runner, grid, modes, seeds, rows=rows, on_row=save, log=log, protocol=cfg.protocol)
     except KeyboardInterrupt:
         print(f"bench: interrupted; {len(rows)} rows saved in {out}", file=err)
         return 130
