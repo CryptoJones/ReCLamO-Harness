@@ -9,10 +9,12 @@ reuses it. Sub-calls made from inside the REPL (``llm_query``,
 REPL's handler, which enforces the per-run budget and, for ``rlm_query``,
 starts a child ``RLM`` one level deeper.
 
-``rlm_query(prompt)`` semantics: the prompt becomes the child's *context* and
-the child gets a fixed query telling it to carry out the task in that context.
-That way a child can slice and search what it was handed, which is the whole
-point of recursing. At ``max_depth`` it degrades to a plain ``llm_query``.
+``rlm_query(question, data)`` semantics: ``data`` becomes the child's
+*context* and ``question`` its query, exactly like the root. The one-argument
+form ``rlm_query(prompt)`` makes the prompt the child's context and gives it a
+fixed query telling it to carry out the task found there. Either way the
+child can slice and search what it was handed, which is the whole point of
+recursing. At ``max_depth`` both degrade to a plain ``llm_query``.
 
 Termination, in priority order per turn: an ``answer`` dict marked ready in
 the REPL; then a ``FINAL`` / ``FINAL_VAR`` candidate in the prose (rejected,
@@ -78,6 +80,9 @@ RLM_QUERY_PROMPT = (
     "data they apply to. Carry out the task and finish with the result."
 )
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Qwen writes FINAL_VAR(answer['content']) after filling the answer dict without
+# setting ready=True (seen live, nested.py depth 1): treat it as the dict's content.
+_ANSWER_CONTENT = re.compile(r"""^answer\s*\[\s*(['"])content\1\s*\]$""")
 
 
 @dataclass
@@ -90,6 +95,7 @@ class RLMResult:
     stop_reason: str  # final | final_var | answer_dict | max_iterations
     trajectory_path: str | None
     depth: int = 0
+    child_turns: int = 0  # root turns taken by nested RLMs (depth >= 1), whole run
 
 
 @dataclass
@@ -102,6 +108,7 @@ class RunBudget:
     started: float = field(default_factory=time.monotonic)
     subcalls: int = 0
     subcall_chars: int = 0
+    child_turns: int = 0  # root-role turns taken at depth >= 1
     usage: Usage = field(default_factory=Usage)
 
     def add(self, completion: Completion) -> None:
@@ -207,7 +214,19 @@ class RLM:
 
         for i in range(1, n + 1):
             iterations = i
-            self._check_limits(repl, answer_state)
+            try:
+                self._check_limits(repl, answer_state)
+            except RLMTimeout:
+                # A child raises so the parent's code sees the error; the root instead
+                # gets the same forced finish as running out of turns, because the REPL
+                # may hold most of the answer (seen live: 11 of 12 nested results lost).
+                if self.depth > 0:
+                    raise
+                self.logger.event("timeout", depth=self.depth, turn=i)
+                return self._forced_finish(history, repl, answer_state, i - 1, started, why="time")
+            if self.depth > 0:
+                assert self._budget is not None
+                self._budget.child_turns += 1
             self._maybe_compact(history, kinds, repl, i)
             self._turn_max_prompt = 0
             messages_in = len(history)
@@ -252,7 +271,9 @@ class RLM:
             cand = find_final(content)
             decision: dict[str, Any] | None = None
             if cand is not None:
-                accepted, value, reason, stop = self._judge_final(cand, repl, rejected_plan)
+                accepted, value, reason, stop = self._judge_final(
+                    cand, repl, rejected_plan, answer_state
+                )
                 decision = {
                     "kind": cand.kind,
                     "value": cand.value,
@@ -332,11 +353,20 @@ class RLM:
         self._budget.add(completion)
 
     def _judge_final(
-        self, cand: FinalCandidate, repl: REPL, rejected_plan: str | None
+        self,
+        cand: FinalCandidate,
+        repl: REPL,
+        rejected_plan: str | None,
+        answer_state: dict[str, Any] | None = None,
     ) -> tuple[bool, str | None, str | None, str]:
         """Return (accepted, value, rejection reason, stop_reason)."""
         if cand.has_code:
             return False, None, "it was sent in the same message as code that had not run yet.", ""
+        if _ANSWER_CONTENT.match(cand.value.strip()):
+            content = (answer_state or {}).get("content")
+            if content:
+                return True, str(content), None, "answer_dict"
+            return False, None, "`answer['content']` has not been set.", ""
         if cand.kind == "FINAL_VAR":
             name = _strip_quotes(cand.value.strip())
             var = repl.get_var(name)
@@ -357,21 +387,30 @@ class RLM:
                 return True, var.value_str or "", None, "final_var"
         return True, _strip_quotes(value), None, "final"
 
-    def _handle_subcall(self, kind: str, prompts: list[str]) -> list[str]:
+    def _handle_subcall(
+        self, kind: str, prompts: list[str], contexts: list[Any] | None = None, /
+    ) -> list[str]:
         """REPL handler: budget, logging, and the rlm_query -> child RLM dispatch."""
         assert self._budget is not None
         budget = self._budget
         cfg = self.cfg
         answers: list[str] = []
-        for prompt in prompts:
+        for i, prompt in enumerate(prompts):
             if budget.subcalls >= budget.max_subcalls:
                 raise RuntimeError(
                     f"sub-call budget for this run exhausted ({budget.max_subcalls}); "
                     "finish with what you have"
                 )
+            data = contexts[i] if contexts is not None else None
+            if data is None:
+                child_context, child_query = prompt, RLM_QUERY_PROMPT
+                prompt_chars = len(prompt)
+            else:
+                child_context, child_query = data, prompt
+                prompt_chars = len(prompt) + describe_context(data)[1].total_chars
             budget.subcalls += 1
-            budget.subcall_chars += len(prompt)
-            self._turn_max_prompt = max(self._turn_max_prompt, len(prompt))
+            budget.subcall_chars += prompt_chars
+            self._turn_max_prompt = max(self._turn_max_prompt, prompt_chars)
             t0 = time.monotonic()
             recurse = kind == "rlm_query" and self.depth + 1 < cfg.max_depth
             if recurse:
@@ -384,8 +423,11 @@ class RLM:
                     printer=self.printer,
                     budget=budget,
                 )
-                answer = child.completion(prompt, RLM_QUERY_PROMPT).answer
+                answer = child.completion(child_context, child_query).answer
             else:
+                if data is not None:  # flatten (question, data) into one prompt
+                    text = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
+                    prompt = f"{prompt}\n\n{text}"
                 completion = self.client.complete([{"role": "user", "content": prompt}], "sub")
                 budget.add(completion)
                 answer = completion.content
@@ -394,12 +436,12 @@ class RLM:
                 depth=self.depth,
                 kind=kind,
                 ran_as="rlm_query" if recurse else "llm_query",
-                prompt_chars=len(prompt),
+                prompt_chars=prompt_chars,
                 answer_chars=len(answer),
                 latency=round(latency, 3),
                 run_subcalls=budget.subcalls,
             )
-            self.printer.subcall(kind, len(prompt), len(answer), latency)
+            self.printer.subcall(kind, prompt_chars, len(answer), latency)
             answers.append(answer)
         return answers
 
@@ -433,14 +475,16 @@ class RLM:
         answer_state: dict[str, Any] | None,
         iterations: int,
         started: float,
+        why: str = "turns",
     ) -> RLMResult:
-        """Out of turns: use what exists in the REPL before asking the model again."""
+        """Out of turns (or time): use what exists in the REPL before asking the model again."""
+        stop = "max_iterations" if why == "turns" else "timeout"
         existing = self._partial(repl, answer_state)
         if existing is not None:
             self.logger.event("forced_finish", method="existing_value", depth=self.depth)
-            return self._finish(existing, "max_iterations", iterations, started)
+            return self._finish(existing, stop, iterations, started)
 
-        prompt = forced_final_prompt()
+        prompt = forced_final_prompt(why)
         if history and history[-1]["role"] == "user":
             history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
         else:
@@ -462,7 +506,7 @@ class RLM:
             content=content,
             reasoning=completion.reasoning,
         )
-        return self._finish(answer, "max_iterations", iterations, started)
+        return self._finish(answer, stop, iterations, started)
 
     def _finish(self, answer: str, reason: str, iterations: int, started: float) -> RLMResult:
         assert self._budget is not None
@@ -473,6 +517,7 @@ class RLM:
             stop_reason=reason,
             iterations=iterations,
             subcalls=self._budget.subcalls,
+            child_turns=self._budget.child_turns,
             usage=dataclasses.asdict(self._budget.usage),
             elapsed=round(elapsed, 3),
         )
@@ -486,6 +531,7 @@ class RLM:
             stop_reason=reason,
             trajectory_path=str(self.logger.path) if self.logger.path else None,
             depth=self.depth,
+            child_turns=self._budget.child_turns,
         )
 
     def _log_iteration(

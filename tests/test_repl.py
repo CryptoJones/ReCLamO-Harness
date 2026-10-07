@@ -31,12 +31,18 @@ class Handler:
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[str]]] = []
+        self.contexts: list[list[Any] | None] = []
         self.fail_with: Exception | None = None
 
-    def __call__(self, kind: str, prompts: list[str]) -> list[str]:
+    def __call__(
+        self, kind: str, prompts: list[str], contexts: list[Any] | None = None
+    ) -> list[str]:
         self.calls.append((kind, list(prompts)))
+        self.contexts.append(contexts)
         if self.fail_with:
             raise self.fail_with
+        if contexts is not None:
+            return [f"{kind}:{p}:{c!r}" for p, c in zip(prompts, contexts, strict=True)]
         return [f"{kind}:{p}" for p in prompts]
 
 
@@ -132,6 +138,18 @@ def test_rlm_query_is_forwarded(repl: SubprocessREPL, handler: Handler) -> None:
     r = repl.execute("print(rlm_query('deep'))")
     assert r.stdout == "rlm_query:deep\n"
     assert handler.calls[0][0] == "rlm_query"
+    assert handler.contexts == [None]
+
+
+def test_rlm_query_with_data_forwards_the_context(repl: SubprocessREPL, handler: Handler) -> None:
+    r = repl.execute(
+        "print(rlm_query('count lines', context[:8]))\nprint(rlm_query('q', {'a': 1}))"
+    )
+    assert r.stdout == "rlm_query:count lines:'line one'\nrlm_query:q:{'a': 1}\n", r.output
+    assert handler.calls == [("rlm_query", ["count lines"]), ("rlm_query", ["q"])]
+    assert handler.contexts == [["line one"], [{"a": 1}]]
+    r = repl.execute("rlm_query('q', 42)")
+    assert r.error and "TypeError: rlm_query data must be a str, list or dict, got int" in r.error
 
 
 def test_per_exec_cap_raises_inside_user_code(repl: SubprocessREPL, handler: Handler) -> None:

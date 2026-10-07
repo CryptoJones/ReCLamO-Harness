@@ -13,6 +13,7 @@ ground truth. ``run()`` is importable by ``eval.py``.
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import random
 import re
 import sys
@@ -147,6 +148,11 @@ def _fill(template: str, rng: random.Random) -> str:
     )
 
 
+def ticket_text(category: str, rng: random.Random) -> str:
+    """One filled-in paraphrase for ``category`` (shared with ``nested.py``)."""
+    return _fill(rng.choice(TEMPLATES[category]), rng)
+
+
 def _banned_pattern() -> re.Pattern[str]:
     words = {w for ws in BANNED.values() for w in ws}
     for cat in CATEGORIES:
@@ -173,7 +179,7 @@ def generate_tickets(n: int = 300, seed: int = 0) -> tuple[list[Ticket], dict[st
     truth = dict.fromkeys(CATEGORIES, 0)
     for i in range(1, n + 1):
         category = rng.choices(CATEGORIES, weights=weights)[0]
-        text = _fill(rng.choice(TEMPLATES[category]), rng)
+        text = ticket_text(category, rng)
         tickets.append(Ticket(i, category, text))
         truth[category] += 1
     check_tickets(tickets)
@@ -294,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--tickets", type=int, default=300)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--log-dir", default="runs")
+    parser.add_argument("--max-depth", type=int, default=None, help="recursion depth (profile)")
     parser.add_argument("--dump", action="store_true", help="print tickets and truth; no model")
     args = parser.parse_args(argv)
 
@@ -309,6 +316,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ConfigError, APIKeyError) as exc:
         print(f"oolong_lite: {exc}", file=sys.stderr)
         return 2
+    if args.max_depth is not None:
+        cfg = dataclasses.replace(cfg, max_depth=args.max_depth)
+        client.cfg = cfg
     summary = run(cfg, client, args.tickets, args.seed, log_dir=args.log_dir)
     print(f"answer:      {summary['answer']!r}")
     print(f"truth:       {summary['truth']}")

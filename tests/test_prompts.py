@@ -42,9 +42,12 @@ def test_rlm_query_omitted_at_depth_one() -> None:
 
 def test_rlm_query_included_at_depth_two_with_guidance() -> None:
     prompt = build_system_prompt(PromptSettings(max_depth=2), META)
-    assert "rlm_query(prompt: str)" in prompt
+    assert "rlm_query(question: str, data)" in prompt
     assert "own REPL" in prompt
     assert "`llm_query` is faster" in prompt
+    assert "Three ways to decompose" in prompt
+    assert "rlm_query(question, text) for name, text in context.items()" in prompt
+    assert "Delegate" not in build_system_prompt(PromptSettings(max_depth=1), META)
 
 
 def test_prompt_contains_batching_warning() -> None:
@@ -123,6 +126,8 @@ def test_nudges_and_rejections() -> None:
     assert rej.startswith("That FINAL was not accepted: it appeared next to code")
     assert "FINAL(<answer>)" in forced_final_prompt()
     assert "No code" in forced_final_prompt()
+    assert forced_final_prompt().startswith("You are out of turns.")
+    assert forced_final_prompt("time").startswith("You are out of time.")
 
 
 def test_batching_wording_follows_concurrency() -> None:

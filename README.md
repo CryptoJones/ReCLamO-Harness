@@ -53,7 +53,7 @@ thinking request, and reports latency, token usage and whether reasoning came ba
 |---|---|
 | `--context PATH\|-` | a text file; a directory (loaded as `{relative path: text}`, hidden and non-UTF-8 files skipped); or `-` for stdin |
 | `-q, --query` | the question |
-| `--max-depth N` | recursion depth; default 1 (the paper found Qwen gets worse at depth 2+) |
+| `--max-depth N` | recursion depth; default 1 (the paper found Qwen gets worse at depth 2+; see *Depth-2 recursion* under Results) |
 | `--max-iterations N` | root turns before a forced finish; default 20 |
 | `--log-dir DIR` | where trajectories go; default `runs/` |
 | `--verbose` | print each turn (response, code, output) to stderr |
@@ -62,9 +62,10 @@ thinking request, and reports latency, token usage and whether reasoning came ba
 | `--sft` | also write the SFT file (see below) |
 | `--sandbox {subprocess,docker}` | where generated code runs (default `subprocess`) |
 
-Exit codes: `0` an answer was produced (including a forced finish when turns run out),
-`3` a limit stopped the run (timeout, consecutive REPL errors, token budget; any
-partial answer is printed), `2` configuration or key errors, `1` the endpoint failed.
+Exit codes: `0` an answer was produced (including a forced finish when turns or time
+run out: whatever the REPL already holds, else one last "out of time" call), `3` a
+limit stopped the run (consecutive REPL errors, token budget; any partial answer is
+printed), `2` configuration or key errors, `1` the endpoint failed.
 
 ### Profiles
 
@@ -164,11 +165,19 @@ REPL, never written to a trajectory, and never included in an error message.
   `--dump` prints the tickets and the ground truth without calling a model.
 - `examples/eval.py` — runs both against a profile, writes `runs/eval-<timestamp>.json`
   and prints the markdown table used below.
+- `examples/nested.py` — the depth-2 task: a dict of 12 department ticket logs (~25K
+  chars each, four different line formats) where each department needs format
+  discovery, an open/close/reopen replay in code and a semantic read of the surviving
+  complaints (the OOLONG-lite paraphrases, so grep cannot classify them). Scored by
+  per-department absolute error plus whether the "most" department is right.
+  `--max-depth`, `--delegate` (tell the model to use `rlm_query` per department),
+  `--max-timeout`, `--dump`, `--json`.
 
 ```sh
 uv run python examples/needle.py --profile pluto --lines 1000000
 uv run python examples/oolong_lite.py --profile pluto --tickets 300
 uv run python examples/eval.py --profile pluto
+uv run python examples/nested.py --profile pluto --max-depth 2 --delegate --max-timeout 900
 ```
 
 Live tests (`uv run pytest -m live`) run `ping`, a thinking round trip and a
@@ -196,6 +205,53 @@ Notes:
   is the over-calling failure the RLM paper reports for Qwen3-Coder (hundreds of calls
   per task), held off here by the batching instruction plus hard caps in code.
 - One run per task; treat these as smoke results, not a benchmark.
+
+### Depth-2 recursion
+
+[#18](https://github.com/CryptoJones/ReCLamO-Harness/issues/18). Same server and
+profile, seed 0, 2026-10-07, `examples/nested.py` (12 departments, 308,990 chars).
+At depth 2 the system prompt gains the `rlm_query(question, data)` tool and a
+"delegate" example, and a sub-call may start a nested RLM with `data` as its own
+`context`. Sub-calls include the children's own `llm_query` calls; child turns are the
+root turns taken inside nested RLMs. Trajectories: `runs/20261007T094618Z-6d710f`,
+`100122Z-16afdc`, `103540Z-49d014`, `104924Z-80a218`, `110425Z-3b9b20` (`.jsonl`).
+
+| Task | Depth | Result | Turns | Sub-calls (child turns) | Tokens | Seconds |
+|---|---|---|---|---|---|---|
+| nested | 1 | exact: 12/12 counts, "most" right | 20 (forced finish from the answer dict) | 5 (0) | 167,301 | 275.5 |
+| nested | 2, v0.1 `rlm_query(prompt)` | abs error 43, "most" right; never called `rlm_query` | 19 | 3 (0) | 180,529 | 426.0 |
+| nested | 2, `rlm_query(question, data)` | abs error 73, "most" wrong; never called `rlm_query` | 16 | 4 (0) | 140,675 | 320.3 |
+| nested | 2, `--delegate` | 11/12 departments exact, then `max_timeout=900` hit during the 12th; no answer returned (fixed below) | 4 (+84 child) | 16 (84) | 328,933 | 900.5 |
+| oolong_lite (300 tickets) | 2 | exact: total abs error 0; never called `rlm_query` | 7 | 6 (0) | 24,910 | 137.6 |
+
+Findings:
+
+- **Qwen does not choose to recurse.** In three depth-2 runs it never called
+  `rlm_query`, even after the tool was redesigned to take `(question, data)` and the
+  prompt gained a delegate example. It did at depth 2 what it does at depth 1: dedupe
+  the 477 complaints into ~110 templates, classify those with a few batched
+  `llm_query` calls, and replay the open/close/reopen events in code. The two depth-2
+  misses were model slips, not recursion: one 161-line batch came back with 186 labels
+  (misaligned counts), and in the other run a spot-check turn decremented the result
+  dict to zero and the next turn submitted it, the paper's E.2 failure, live.
+- **When told to delegate, nested RLMs work but are slow.** 11 of the 11 children that
+  finished were exactly right (4 to 11 turns each, 37 to 128 s, format discovery and the
+  event replay in code, the semantic judgement inline in a thinking turn). At ~80 s per
+  department the 12 children need ~16 min against 4.6 min for depth 1 on a server that
+  takes one request at a time, and the run hit the 15 min cap on the 12th. The harness
+  then threw away the eleven results: the child's timeout reached the root as a
+  `RuntimeError` inside its loop and the root's own deadline check raised with no
+  partial answer. Fixed in the same PR: a root timeout now gets the forced finish that
+  running out of turns already had (REPL value first, else one "out of time" call).
+- Depth 1 is not free either: 20 turns, mostly format discovery across 12 logs, and it
+  ran out of turns with the answer already in the dict because
+  `FINAL_VAR(answer['content'])` was rejected as "no such variable" (also fixed).
+- **The default stays `max_depth=1`.** On pluto recursion costs about 3x the wall clock
+  and 2x the tokens for the same answer, and the model will not use it unless the task
+  tells it to. The per-department accuracy is the encouraging part; revisit with a
+  server that runs children in parallel or a smaller per-child turn budget. One seed
+  per row (pluto was shared, with 6 to 24 min lock waits per run), so these are
+  observations, not a benchmark.
 
 ## Development
 

@@ -119,7 +119,9 @@ class Worker:
 
     # --- builtins exposed to the model ------------------------------------
 
-    def _request(self, kind: str, prompts: list[str]) -> list[str]:
+    def _request(
+        self, kind: str, prompts: list[str], contexts: list[Any] | None = None
+    ) -> list[str]:
         for p in prompts:
             if not isinstance(p, str):
                 raise TypeError(f"{kind} prompts must be str, got {type(p).__name__}")
@@ -132,7 +134,10 @@ class Worker:
         self.subcalls_this_exec += len(prompts)
         self.proto.next_id += 1
         rid = self.proto.next_id
-        self.proto.send({"type": "llm_request", "id": rid, "kind": kind, "prompts": prompts})
+        msg: dict[str, Any] = {"type": "llm_request", "id": rid, "kind": kind, "prompts": prompts}
+        if contexts is not None:
+            msg["contexts"] = contexts
+        self.proto.send(msg)
         while True:
             reply = self.proto.recv()
             if reply is None:
@@ -157,9 +162,20 @@ class Worker:
             return []
         return self._request("llm_query_batched", prompts)
 
-    def rlm_query(self, prompt: str) -> str:
-        """Ask a nested RLM (it gets its own REPL). The parent may downgrade it."""
-        return self._request("rlm_query", [prompt])[0]
+    def rlm_query(self, question: str, data: Any = None) -> str:
+        """Ask a nested RLM (it gets its own REPL). The parent may downgrade it.
+
+        With ``data`` (a str, list or dict) the child gets it as its own
+        ``context`` and ``question`` as its task. Without it, ``question`` is
+        treated as a self-contained task the child reads as its context.
+        """
+        if data is None:
+            return self._request("rlm_query", [question])[0]
+        if not isinstance(data, str | list | dict):
+            raise TypeError(
+                f"rlm_query data must be a str, list or dict, got {type(data).__name__}"
+            )
+        return self._request("rlm_query", [question], [data])[0]
 
     def show_vars(self) -> None:
         """Print the variables created so far with their types and sizes."""
