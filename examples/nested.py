@@ -276,7 +276,15 @@ def build_truth(depts: list[Department]) -> tuple[dict[str, int], str]:
     return truth, max(truth, key=lambda k: truth[k])
 
 
-def build_query() -> str:
+DELEGATE_HINT = (
+    " Handle each department with its own `rlm_query(question, context[department])` call, "
+    "asking it for just the number, and combine the answers in the REPL."
+)
+
+
+def build_query(delegate: bool = False) -> str:
+    """The task. With ``delegate`` the query also tells the model to recurse per department,
+    which separates "does the model choose rlm_query" from "does rlm_query work"."""
     return (
         "Each key of `context` is a department and its value is that department's ticket "
         "log for the quarter, one event per line. Departments use different log formats. "
@@ -286,7 +294,7 @@ def build_query() -> str:
         "(the goods arrived physically damaged), as opposed to billing, shipping delays, "
         "login problems or feature requests. Reply with one line per department in the "
         "form 'Department: count', then a last line 'most: Department' naming the "
-        "department with the highest count."
+        "department with the highest count." + (DELEGATE_HINT if delegate else "")
     )
 
 
@@ -329,6 +337,7 @@ def run(
     seed: int = 0,
     *,
     log_dir: str | None = None,
+    delegate: bool = False,
 ) -> dict[str, Any]:
     depts = generate(n_departments, chars, seed)
     context = build_context(depts)
@@ -341,11 +350,12 @@ def run(
         "chars": sum(len(v) for v in context.values()),
         "formats": {d.name: d.fmt for d in depts},
         "max_depth": cfg.max_depth,
+        "delegate": delegate,
         "truth": truth,
         "most": most,
     }
     try:
-        result = RLM(cfg, client, logger=logger).completion(context, build_query())
+        result = RLM(cfg, client, logger=logger).completion(context, build_query(delegate))
     except RLMError as exc:
         answer = exc.partial_answer or ""
         predicted, errors, total, most_predicted, most_ok = score(answer, truth, most)
@@ -400,6 +410,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-depth", type=int, default=1)
     parser.add_argument("--max-timeout", type=float, default=600.0, help="seconds, whole run")
     parser.add_argument("--max-subcalls", type=int, default=None, help="per run (profile default)")
+    parser.add_argument(
+        "--delegate",
+        action="store_true",
+        help="tell the model to use rlm_query per department (needs --max-depth 2)",
+    )
     parser.add_argument("--log-dir", default="runs")
     parser.add_argument("--json", action="store_true", help="print the summary as JSON")
     parser.add_argument("--dump", action="store_true", help="print the logs and truth; no model")
@@ -428,7 +443,15 @@ def main(argv: list[str] | None = None) -> int:
     cfg = dataclasses.replace(cfg, **overrides)
     client.cfg = cfg
 
-    summary = run(cfg, client, args.departments, args.chars, args.seed, log_dir=args.log_dir)
+    summary = run(
+        cfg,
+        client,
+        args.departments,
+        args.chars,
+        args.seed,
+        log_dir=args.log_dir,
+        delegate=args.delegate,
+    )
     if args.json:
         print(json.dumps(summary, indent=2, ensure_ascii=False))
     else:

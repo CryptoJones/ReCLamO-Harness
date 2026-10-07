@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from reclamo.config import ModelConfig, RLMConfig
-from reclamo.errors import RLMErrorLimit, RLMTimeout, RLMTokenLimit
+from reclamo.errors import RLMErrorLimit, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger
 from reclamo.prompts import forced_final_prompt
 from reclamo.rlm import RLM, describe_context
@@ -306,15 +306,41 @@ def test_max_iterations_forced_model_call_when_nothing_exists() -> None:
     assert "Turn 2/1" not in lm.root_calls[1]["messages"][-1]["content"]
 
 
-def test_timeout_carries_partial_answer() -> None:
+def test_timeout_at_root_finishes_from_existing_value() -> None:
     cfg = _cfg(max_timeout=0.3)
     lm = MockLM(
         ["```repl\nimport time\nanswer['content'] = 'so far'\ntime.sleep(0.5)\n```", "FINAL(x)"]
     )
-    with pytest.raises(RLMTimeout) as exc:
-        RLM(cfg, lm).completion(CONTEXT, "?")
-    assert exc.value.partial_answer == "so far"
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason, result.iterations) == ("so far", "timeout", 1)
     assert len(lm.root_calls) == 1
+
+
+def test_timeout_at_root_asks_the_model_once_when_nothing_is_ready() -> None:
+    cfg = _cfg(max_timeout=0.3)
+    lm = MockLM(["```repl\nimport time\nparts = [1, 2]\ntime.sleep(0.5)\n```", "FINAL_VAR(parts)"])
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("[1, 2]", "timeout")
+    assert len(lm.root_calls) == 2
+    assert lm.root_calls[1]["messages"][-1]["content"].endswith(forced_final_prompt("time"))
+
+
+def test_timeout_inside_a_child_reaches_the_parent_as_an_error_then_forced_finish() -> None:
+    """Seen live: the deadline passed inside the 12th rlm_query; the parent kept its REPL."""
+    cfg = _cfg(max_depth=2, max_timeout=0.3)
+    root = [
+        "```repl\nimport time\ndone = {'a': rlm_query('q', 'x')}\ntime.sleep(0.4)\n"
+        "done['b'] = rlm_query('q', 'y')\n```",
+        "FINAL(1)",  # child a (before the deadline)
+        # child b never gets a turn: its first limit check raises RLMTimeout
+        "FINAL_VAR(done)",  # parent, forced finish
+    ]
+    result, lm = _run(root, cfg=cfg)
+    assert (result.answer, result.stop_reason) == ("{'a': '1'}", "timeout")
+    assert result.child_turns == 1  # child b never ran a turn, so it is not counted
+    output = lm.root_calls[2]["messages"][-1]["content"]
+    assert "RuntimeError: RLMTimeout: run exceeded max_timeout=0.3s" in output
+    assert output.endswith(forced_final_prompt("time"))
 
 
 def test_error_limit() -> None:

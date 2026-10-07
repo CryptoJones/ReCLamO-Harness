@@ -261,6 +261,9 @@ def test_nested_is_deterministic_and_grep_proof() -> None:
         for t in d.tickets:
             assert not pattern.search(t.text), (d.name, t.text)
     assert "damaged item" in nested.build_query() and "Department: count" in nested.build_query()
+    assert "rlm_query" not in nested.build_query()
+    assert nested.build_query(delegate=True).endswith(nested.DELEGATE_HINT)
+    assert "rlm_query(question, context[department])" in nested.build_query(delegate=True)
 
 
 def test_nested_default_size_is_large() -> None:

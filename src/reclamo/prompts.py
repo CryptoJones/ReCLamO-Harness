@@ -218,9 +218,10 @@ def final_rejection(reason: str) -> str:
     )
 
 
-def forced_final_prompt() -> str:
+def forced_final_prompt(why: str = "turns") -> str:
+    """``why`` is "turns" or "time"."""
     return (
-        "You are out of turns. Reply now with your best answer as `FINAL(<answer>)`, "
+        f"You are out of {why}. Reply now with your best answer as `FINAL(<answer>)`, "
         "or `FINAL_VAR(<name>)` if a variable already holds it. No code."
     )
 

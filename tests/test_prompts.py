@@ -126,6 +126,8 @@ def test_nudges_and_rejections() -> None:
     assert rej.startswith("That FINAL was not accepted: it appeared next to code")
     assert "FINAL(<answer>)" in forced_final_prompt()
     assert "No code" in forced_final_prompt()
+    assert forced_final_prompt().startswith("You are out of turns.")
+    assert forced_final_prompt("time").startswith("You are out of time.")
 
 
 def test_batching_wording_follows_concurrency() -> None:

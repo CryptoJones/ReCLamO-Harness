@@ -214,10 +214,19 @@ class RLM:
 
         for i in range(1, n + 1):
             iterations = i
+            try:
+                self._check_limits(repl, answer_state)
+            except RLMTimeout:
+                # A child raises so the parent's code sees the error; the root instead
+                # gets the same forced finish as running out of turns, because the REPL
+                # may hold most of the answer (seen live: 11 of 12 nested results lost).
+                if self.depth > 0:
+                    raise
+                self.logger.event("timeout", depth=self.depth, turn=i)
+                return self._forced_finish(history, repl, answer_state, i - 1, started, why="time")
             if self.depth > 0:
                 assert self._budget is not None
                 self._budget.child_turns += 1
-            self._check_limits(repl, answer_state)
             self._maybe_compact(history, kinds, repl, i)
             self._turn_max_prompt = 0
             messages_in = len(history)
@@ -466,14 +475,16 @@ class RLM:
         answer_state: dict[str, Any] | None,
         iterations: int,
         started: float,
+        why: str = "turns",
     ) -> RLMResult:
-        """Out of turns: use what exists in the REPL before asking the model again."""
+        """Out of turns (or time): use what exists in the REPL before asking the model again."""
+        stop = "max_iterations" if why == "turns" else "timeout"
         existing = self._partial(repl, answer_state)
         if existing is not None:
             self.logger.event("forced_finish", method="existing_value", depth=self.depth)
-            return self._finish(existing, "max_iterations", iterations, started)
+            return self._finish(existing, stop, iterations, started)
 
-        prompt = forced_final_prompt()
+        prompt = forced_final_prompt(why)
         if history and history[-1]["role"] == "user":
             history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
         else:
@@ -495,7 +506,7 @@ class RLM:
             content=content,
             reasoning=completion.reasoning,
         )
-        return self._finish(answer, "max_iterations", iterations, started)
+        return self._finish(answer, stop, iterations, started)
 
     def _finish(self, answer: str, reason: str, iterations: int, started: float) -> RLMResult:
         assert self._budget is not None
