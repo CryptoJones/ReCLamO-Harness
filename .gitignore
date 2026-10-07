@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv / virtualenvs
+.venv/
+venv/
+
+# ReCLamO runs and secrets
+runs/
+.env
+.env.*
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Claude Code worktrees
+.claude/
