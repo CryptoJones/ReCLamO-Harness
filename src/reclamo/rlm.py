@@ -47,8 +47,8 @@ from reclamo.prompts import (
     reverify_nudge,
     turn_prompt,
 )
+from reclamo.repl import make_repl
 from reclamo.repl.base import REPL, ExecResult, LLMHandler
-from reclamo.repl.subprocess_repl import SubprocessREPL
 
 
 class LMLike(Protocol):
@@ -133,7 +133,7 @@ def _strip_quotes(value: str) -> str:
 
 
 def _default_repl_factory(cfg: RLMConfig, handler: LLMHandler) -> REPL:
-    return SubprocessREPL(cfg, handler)
+    return make_repl(cfg, handler)  # honours cfg.sandbox
 
 
 class RLM:
@@ -229,6 +229,16 @@ class RLM:
                 if res.answer is not None:
                     answer_state = res.answer
 
+            # A ready answer wins even if another block in the same turn errored.
+            for res in results:
+                if res.answer_ready:
+                    answer = (res.answer or {}).get("content") or ""
+                    decision = {"kind": "answer_dict", "accepted": True}
+                    self._log_iteration(
+                        i, messages_in, completion, blocks, results, notes, decision
+                    )
+                    return self._finish(answer, "answer_dict", i, started)
+
             if blocks:
                 consecutive_errors = consecutive_errors + 1 if any(r.error for r in results) else 0
                 if consecutive_errors >= cfg.max_errors:
@@ -238,15 +248,6 @@ class RLM:
                         f"(max_errors={cfg.max_errors})",
                         partial_answer=self._partial(repl, answer_state),
                     )
-
-            for res in results:
-                if res.answer_ready:
-                    answer = (res.answer or {}).get("content") or ""
-                    decision = {"kind": "answer_dict", "accepted": True}
-                    self._log_iteration(
-                        i, messages_in, completion, blocks, results, notes, decision
-                    )
-                    return self._finish(answer, "answer_dict", i, started)
 
             cand = find_final(content)
             decision: dict[str, Any] | None = None
