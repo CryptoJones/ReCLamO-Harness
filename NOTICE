@@ -1,0 +1,16 @@
+ReCLamO-Harness
+Copyright 2026 Aaron K. Clark
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The design of this software is derived from two MIT-licensed projects:
+
+  - alexzhang13/rlm            Copyright (c) 2026 Alex Zhang
+    https://github.com/alexzhang13/rlm
+  - alexzhang13/rlm-minimal    Copyright (c) 2025 az
+    https://github.com/alexzhang13/rlm-minimal
+
+ReCLamO-Harness is a clean-room implementation that follows their design. No files
+from either project are copied into this repository. Should any snippet ever be ported
+verbatim, it keeps the upstream copyright line and MIT permission notice alongside it.
+The full MIT license texts are reproduced in THIRD_PARTY_LICENSES.md.
