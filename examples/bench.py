@@ -12,7 +12,8 @@ this file adds the grid, the modes and the bookkeeping:
 - ``rlm``: the harness, through the library API.
 - ``plain``: the whole context in one prompt, the paper's baseline. It runs
   only when the prompt fits the model's usable window (``context_tokens`` minus
-  the root output reserve, at ``CHARS_PER_TOKEN`` chars per token); otherwise
+  the root output reserve; one token per digit, else ``CHARS_PER_TOKEN`` chars
+  per token); otherwise
   the row records ``does not fit`` and no call. Each plain row makes two calls,
   thinking on (with a generous output budget, capped by what fits beside the
   prompt) and thinking off, keeps both, and reports the better one.
@@ -32,6 +33,7 @@ import argparse
 import dataclasses
 import json
 import math
+import re
 import statistics
 import sys
 import time
@@ -170,8 +172,15 @@ def build_instance(task: str, size: int, seed: int) -> Instance:
 # --- the plain baseline and the fit decision ----------------------------------------
 
 
+_DIGITS = re.compile(r"[0-9]")
+
+
 def estimate_tokens(text: str) -> int:
-    return math.ceil(len(text) / CHARS_PER_TOKEN)
+    """Prompt-token estimate: one token per digit, ``CHARS_PER_TOKEN`` chars per token
+    for the rest. Qwen tokenises digits one at a time, so a plain chars/3.5 undercounts
+    numeric text by about 2x (needle: 14.5K estimated versus 30.8K measured)."""
+    digits = len(_DIGITS.findall(text))
+    return digits + math.ceil((len(text) - digits) / CHARS_PER_TOKEN)
 
 
 def plain_messages(context: str, query: str) -> list[dict[str, str]]:
@@ -200,8 +209,12 @@ def fit_decision(cfg: RLMConfig, context: str, query: str) -> tuple[bool, int, i
 def truncate_to_fit(cfg: RLMConfig, context: str, query: str) -> tuple[str, float]:
     """Keep the head of ``context`` so the plain prompt fits; return (text, kept fraction)."""
     overhead = estimate_tokens("".join(m["content"] for m in plain_messages("", query)))
-    keep_chars = int((usable_tokens(cfg) - overhead) * CHARS_PER_TOKEN)
-    keep_chars = max(0, min(len(context), keep_chars))
+    budget = usable_tokens(cfg) - overhead
+    keep_chars = min(len(context), int(budget * CHARS_PER_TOKEN))
+    # Digit-heavy text estimates higher than chars/3.5; shrink until it fits.
+    while keep_chars > 0 and estimate_tokens(context[:keep_chars]) > budget:
+        keep_chars = int(keep_chars * 0.9)
+    keep_chars = max(0, keep_chars)
     return context[:keep_chars], (keep_chars / len(context) if context else 1.0)
 
 
@@ -765,6 +778,7 @@ def main(argv: list[str] | None = None) -> int:
         "context_tokens": cfg.context_tokens,
         "usable_tokens": usable_tokens(cfg),
         "chars_per_token": CHARS_PER_TOKEN,
+        "token_estimate": "one token per digit, else chars/3.5",
         "root_max_tokens": cfg.root.max_tokens,
         "plain_max_tokens": args.plain_max_tokens,
         "plain_rule": "best of thinking-on and thinking-off single calls",

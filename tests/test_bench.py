@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import math
 import re
 import subprocess
 import sys
@@ -160,6 +161,13 @@ def test_fit_decision_uses_window_minus_output_reserve() -> None:
     big = "x" * 2900
     fits, est, _ = bench.fit_decision(cfg, big, query)
     assert not fits and est > 800
+
+
+def test_estimate_tokens_counts_digits_one_each() -> None:
+    assert bench.estimate_tokens("") == 0
+    assert bench.estimate_tokens("abcdefg") == 2  # 7 chars / 3.5
+    assert bench.estimate_tokens("1234567") == 7
+    assert bench.estimate_tokens("record 12: value 345") == 5 + math.ceil(15 / 3.5)
 
 
 def test_truncate_to_fit_keeps_the_head_and_fits() -> None:
