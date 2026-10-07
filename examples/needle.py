@@ -34,14 +34,22 @@ _WORDS = [
 ]  # fmt: skip
 
 
-def build_haystack(lines: int, seed: int = 0) -> tuple[str, str, int]:
-    """Return (context, passphrase, zero-based needle line index)."""
+def build_haystack(
+    lines: int, seed: int = 0, position: float | None = None
+) -> tuple[str, str, int]:
+    """Return (context, passphrase, zero-based needle line index).
+
+    ``position`` (0.0-1.0) pins the needle to a fraction of the way through the
+    file; ``None`` picks a random line from the seed, as before.
+    """
     if lines < 1:
         raise ValueError("lines must be >= 1")
+    if position is not None and not 0.0 <= position <= 1.0:
+        raise ValueError("position must be between 0.0 and 1.0")
     rng = random.Random(seed)
     first, second = rng.sample(_WORDS, 2)
     passphrase = f"{first}-{second}"
-    needle = rng.randrange(lines)
+    needle = rng.randrange(lines) if position is None else min(lines - 1, int(position * lines))
     out = [f"record {i}: value {rng.randint(0, 10**6)}" for i in range(lines)]
     out[needle] = f"record {needle}: the secret passphrase is {passphrase}"
     return "\n".join(out), passphrase, needle
