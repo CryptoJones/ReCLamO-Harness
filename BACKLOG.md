@@ -10,7 +10,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] Real benchmark: repeated runs on OOLONG / long-context QA ([#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19))
 - [ ] Optional native tool-calling protocol (`execute_python` tool) ([#20](https://github.com/CryptoJones/ReCLamO-Harness/issues/20))
 - [ ] Independent eval on externally authored data (roundtable-authored generators in `evals/independent/`) ([#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22))
-- [ ] Concurrent sub-calls: Strata parallel=4 slots on pluto + concurrency=4 profile ([#25](https://github.com/CryptoJones/ReCLamO-Harness/issues/25))
+- [ ] Idea (hypothetical): concurrent sub-calls via Strata parallel slots ([#25](https://github.com/CryptoJones/ReCLamO-Harness/issues/25))
 - [ ] Multi-model sub-calls: per-role endpoints, endpoint pool, optional majority vote ([#26](https://github.com/CryptoJones/ReCLamO-Harness/issues/26))
 
 ## Done
