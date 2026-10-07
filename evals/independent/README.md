@@ -22,7 +22,11 @@ test, so its task could favour Qwen.
 | `generators/<lane>.py` | The Python block extracted from that response, **byte-for-byte unmodified** |
 | `manifest.json` | Provenance (vendor, model, harness), sha256 of each generator, sizes, status |
 | `validate.py` | The validator used: runs each generator's self-test and checks it in a no-network container |
-| `validation-report.json` | Raw validator output |
+| `validation-report.json` | Raw validator output (originals) |
+| `check.py` | The same checks without Docker |
+| `fixed/self/` | Each original author's own fix, with the request and response |
+| `fixed/minimax/` | MiniMax-M3's fixes for all five, its task and `FIXES.md` |
+| `fixed/active/` | **The evaluation set**: one passing version per task |
 
 The generators are kept exactly as delivered, defects included. That is what makes them
 independent. If we repair one, the repaired copy goes in a separate file with a diff and
@@ -30,41 +34,60 @@ a note, and the original stays here unchanged.
 
 ## Status
 
-The validator checks these things for every generator:
+Each generator was validated in `python:3.12-slim` with `--network none`, as a non-root
+user, on a read-only filesystem (`validate.py`). The checks are:
 
 - its own `__main__` self-test passes;
-- sizes are about 60K, 300K and 1.2M characters;
-- output is the same for the same seed and changes with the seed, both within one process
-  and across separate processes;
-- `score(truth) == 1` and `score("") == 0`.
+- context sizes are about 60K, 300K and 1.2M characters;
+- the same seed gives the same output, both within one process and across separate
+  processes;
+- a different seed changes the output;
+- `score(truth) == 1` and `score("") < 1`.
 
-It runs everything in `python:3.12-slim` with `--network none`, as a non-root user, on a
-read-only filesystem.
+`check.py` runs the same checks without Docker.
 
-| Lane | Model | Task | Status |
-|---|---|---|---|
-| GLaDOS | xAI grok-4.6 | Transit co-op records: net authorized amount and certifying member for the current legal successor of a renamed project, under bylaws and SOP | **pass** |
-| SHODAN | OpenAI gpt-6-astra | Month-end packet: per-office freight credits after signed corrections, custody findings and agreement terms | **pass** |
-| TheDixieFlatline | Google gemini-3.1-pro-high | Chain of custody: final room of an asset through renames and transfers (medium size ≈260K) | **pass** |
-| Cerebex | Z-AI glm-5.3-flash | Expense emails: travel total after amendments and reversals | defect: `score()` accepts a deliberately wrong answer |
-| Neuromancer | DeepSeek v4-flash | March travel reimbursed after adjustments and denials | defect: small size degenerates to $0; lenient scorer |
-| SELMA | NVIDIA Nemotron 3 Super | Final owner of a review after reassignments in an email thread | defect: output depends on `PYTHONHASHSEED` |
-| MasterControl | Mistral Medium 3.1 | Only employee flagged for two audit issues, plus their total | defect: scorer gives its own truth 0.5 |
-| Multivac | Nous Hermes 4 405B | Requirement status after merges and splits | defect: contexts 2.7K / 6K / 16K chars |
+Five originals failed. They were **not** left broken. Each repair went the same way:
 
-Only the **pass** generators feed headline results. The others are recorded because a
-lane's failure to follow the brief is itself data about that lane.
+1. The failing generator went back to the lane that wrote it, together with the
+   validator's exact findings. You can read the request and the response under
+   `fixed/self/`.
+2. In parallel, **MiniMax-M3**, a non-Anthropic model running in a sandboxed Claude Code
+   session, repaired all five against `check.py`. Its work and reasoning are in
+   `fixed/minimax/` and `FIXES.md`.
+3. The active version is the author's own fix when that fix passed, which keeps
+   authorship independent, and the MiniMax fix otherwise.
+
+**`fixed/active/` is the evaluation set. All eight tasks pass.**
+
+| Lane | Model | Task | Original | Active version |
+|---|---|---|---|---|
+| GLaDOS | xAI grok-4.6 | Transit co-op records: net authorized amount and certifying member for the current legal successor of a renamed project, under bylaws and SOP | pass | original |
+| SHODAN | OpenAI gpt-6-astra | Month-end packet: per-office freight credits after signed corrections, custody findings and agreement terms | pass | original |
+| TheDixieFlatline | Google gemini-3.1-pro-high | Chain of custody: final room of an asset through renames and transfers (medium size ≈260K) | pass | original |
+| Cerebex | Z-AI glm-5.3-flash | Expense emails: travel total after amendments and reversals | self-test collided when truth = 0 | **author's fix** |
+| Neuromancer | DeepSeek v4-flash | March travel reimbursed after adjustments and denials | small size degenerate ($0); lenient scorer | **author's fix** |
+| SELMA | NVIDIA Nemotron 3 Super | Final owner of a review after reassignments in an email thread | depended on `PYTHONHASHSEED` | **author's fix** |
+| MasterControl | Mistral Medium 3.1 | Only employee flagged for two audit issues, plus their total | scorer regex split `39195` into `391`/`95` | **author's fix** |
+| Multivac | Nous Hermes 4 405B | Requirement status after merges and splits | contexts 2.7K–16K; scorer missed dict form | **MiniMax fix** (author's second attempt overshot sizes and kept the scorer bug) |
+
+Notes: Multivac's descriptions are templated, so its difficulty comes from following
+requirement IDs through long merge chains rather than from paraphrase. Originals stay in
+`generators/` byte-for-byte, and every file is pinned by sha256 in `manifest.json` and
+checked in CI.
 
 ## Running
 
 ```sh
-# Validate (needs Docker; the directory must be one Docker Desktop can mount)
+# Check the evaluation set (no Docker needed)
+python3 evals/independent/check.py evals/independent/fixed/active/*.py
+
+# Validate the originals in Docker (the directory must be one Docker Desktop can mount)
 python3 evals/independent/validate.py evals/independent/answers ~/.cache/reclamo/rtgen
 
 # Use a generator directly
 python3 -c "
 import importlib.util, sys
-spec = importlib.util.spec_from_file_location('g', 'evals/independent/generators/SHODAN.py')
+spec = importlib.util.spec_from_file_location('g', 'evals/independent/fixed/active/SHODAN.py')
 g = importlib.util.module_from_spec(spec); sys.modules['g'] = g; spec.loader.exec_module(g)
 d = g.generate(0, 'medium'); print(len(d['context']), d['question']); print(d['answer'])
 "

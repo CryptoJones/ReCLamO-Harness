@@ -12,7 +12,6 @@
       "vendor": "xai",
       "model": "grok-4.6",
       "harness": "cli (grok)",
-      "status": "pass",
       "task": "Transit co-op public-records dump: net authorized amount and certifying member for the current legal successor of a renamed project, applying bylaws/SOP and ignoring informal commentary.",
       "file": "generators/GLaDOS.py",
       "sha256": "39233a93cfe4b00398fd805d27bc53855e0f0ee0e48b5c63184c894cef56e7a8",
@@ -21,13 +20,19 @@
         "medium": 300021,
         "large": 1200079
       },
-      "self_test_exit": 0
+      "self_test_exit": 0,
+      "original_status": "pass",
+      "fix_attempts": [],
+      "active": {
+        "file": "fixed/active/GLaDOS.py",
+        "sha256": "39233a93cfe4b00398fd805d27bc53855e0f0ee0e48b5c63184c894cef56e7a8",
+        "source": "original"
+      }
     },
     "SHODAN": {
       "vendor": "openai",
       "model": "gpt-6-astra",
       "harness": "cli (codex)",
-      "status": "pass",
       "task": "May closing packet: per-office earned freight credits after signed corrections, custody findings and agreement terms.",
       "file": "generators/SHODAN.py",
       "sha256": "90568550c9f8528231f31be480e1b45b6b430af8eb04b5a95c6dc7ca9b0b9393",
@@ -36,13 +41,19 @@
         "medium": 301744,
         "large": 1201259
       },
-      "self_test_exit": 0
+      "self_test_exit": 0,
+      "original_status": "pass",
+      "fix_attempts": [],
+      "active": {
+        "file": "fixed/active/SHODAN.py",
+        "sha256": "90568550c9f8528231f31be480e1b45b6b430af8eb04b5a95c6dc7ca9b0b9393",
+        "source": "original"
+      }
     },
     "TheDixieFlatline": {
       "vendor": "google",
       "model": "gemini-3.1-pro-high",
       "harness": "cli (agy)",
-      "status": "pass",
       "task": "Chain-of-custody audit: final physical location of an asset through renames, transfers and corrections. Note: medium size is ~260K chars (brief asked ~300K); the true room name also appears among many distractor rooms.",
       "file": "generators/TheDixieFlatline.py",
       "sha256": "8b933ab47285cc65522b8741b3b3494234a72010ace7f973684ea100f13a5fbd",
@@ -51,13 +62,19 @@
         "medium": 260233,
         "large": 1072099
       },
-      "self_test_exit": 0
+      "self_test_exit": 0,
+      "original_status": "pass",
+      "fix_attempts": [],
+      "active": {
+        "file": "fixed/active/TheDixieFlatline.py",
+        "sha256": "8b933ab47285cc65522b8741b3b3494234a72010ace7f973684ea100f13a5fbd",
+        "source": "original"
+      }
     },
     "Cerebex": {
       "vendor": "z-ai",
       "model": "glm-5.3-flash",
       "harness": "http (OpenRouter)",
-      "status": "defect: scorer",
       "task": "Expense-reimbursement email archive: total travel-category USD after amendments and reversals. Own self-test fails: score() gives a deliberately wrong answer 1.0.",
       "file": "generators/Cerebex.py",
       "sha256": "104f7fe8bd502a274091c18932f05014179c92e1ebca9de9928d254b1eb51f4a",
@@ -66,13 +83,35 @@
         "medium": 302976,
         "large": 1211887
       },
-      "self_test_exit": 1
+      "self_test_exit": 1,
+      "original_status": "defect: scorer",
+      "fix_attempts": [
+        {
+          "by": "Cerebex (glm-5.3-flash) - original author, given the validator's findings",
+          "file": "fixed/self/Cerebex.py",
+          "sha256": "2f991921afdf7d2a9115272a644278e97175c9a6c0598b6996efbeededea4767",
+          "request": "fixed/self/requests/Cerebex.md",
+          "response": "fixed/self/answers/Cerebex.md",
+          "result": "pass"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed, all five in one session",
+          "file": "fixed/minimax/Cerebex.py",
+          "sha256": "077223423d42e7adced558ecf673c9199e97d47529b9ca3ba8f89babea7b0288",
+          "notes": "fixed/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
+      "active": {
+        "file": "fixed/active/Cerebex.py",
+        "sha256": "2f991921afdf7d2a9115272a644278e97175c9a6c0598b6996efbeededea4767",
+        "source": "self-fix"
+      }
     },
     "Neuromancer": {
       "vendor": "deepseek",
       "model": "deepseek-v4-flash",
       "harness": "http (OpenRouter)",
-      "status": "defect: small size + scorer",
       "task": "Total March travel reimbursed after adjustments, excluding denials. Small size degenerates to $0.00 truth and score() accepts '$0.00'/missing '$' as correct; medium/large produce non-trivial truths.",
       "file": "generators/Neuromancer.py",
       "sha256": "69d93f89c0bcb5737071a5abc722edaa049cf0ca74895929bbc10f194fabcbf8",
@@ -81,13 +120,35 @@
         "medium": 295027,
         "large": 1195055
       },
-      "self_test_exit": 1
+      "self_test_exit": 1,
+      "original_status": "defect: small size + scorer",
+      "fix_attempts": [
+        {
+          "by": "Neuromancer (deepseek-v4-flash) - original author, given the validator's findings",
+          "file": "fixed/self/Neuromancer.py",
+          "sha256": "a21e3d7081d320246c81d809f5d8e797e3f567a6dfc347ae4941e83748448e08",
+          "request": "fixed/self/requests/Neuromancer.md",
+          "response": "fixed/self/answers/Neuromancer.md",
+          "result": "pass"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed, all five in one session",
+          "file": "fixed/minimax/Neuromancer.py",
+          "sha256": "2ffbb4e1604fdf385e063f25bb614b47428c9e7135de7f2df65de0dc1f0d584c",
+          "notes": "fixed/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
+      "active": {
+        "file": "fixed/active/Neuromancer.py",
+        "sha256": "a21e3d7081d320246c81d809f5d8e797e3f567a6dfc347ae4941e83748448e08",
+        "source": "self-fix"
+      }
     },
     "SELMA": {
       "vendor": "nvidia",
       "model": "nemotron-3-super-120b-a12b:free",
       "harness": "http (OpenRouter)",
-      "status": "defect: non-deterministic",
       "task": "Email thread: final owner of the AI Ethics Review after reassignments. Output differs across processes (depends on PYTHONHASHSEED), violating the determinism requirement; deterministic within one process.",
       "file": "generators/SELMA.py",
       "sha256": "bade901b341924c37563945b924b476d1ba84d236d329696566637498591c8ed",
@@ -96,13 +157,35 @@
         "medium": 300197,
         "large": 1200021
       },
-      "self_test_exit": 0
+      "self_test_exit": 0,
+      "original_status": "defect: non-deterministic",
+      "fix_attempts": [
+        {
+          "by": "SELMA (nemotron-3-super-120b-a12b:free) - original author, given the validator's findings",
+          "file": "fixed/self/SELMA.py",
+          "sha256": "d9b26359076aa175e30f10f6c8bd86ff08fef6afa515fec9d7fe0e91fa66f9ad",
+          "request": "fixed/self/requests/SELMA.md",
+          "response": "fixed/self/answers/SELMA.md",
+          "result": "pass"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed, all five in one session",
+          "file": "fixed/minimax/SELMA.py",
+          "sha256": "f60dbac71a27fd436da404013526c051254ee5368a23470df4d46cf712769350",
+          "notes": "fixed/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
+      "active": {
+        "file": "fixed/active/SELMA.py",
+        "sha256": "d9b26359076aa175e30f10f6c8bd86ff08fef6afa515fec9d7fe0e91fa66f9ad",
+        "source": "self-fix"
+      }
     },
     "MasterControl": {
       "vendor": "mistral",
       "model": "mistral-medium-3.1",
       "harness": "http (OpenRouter)",
-      "status": "defect: scorer",
       "task": "Final audit summary: the only employee flagged for two specific issues and their flagged total. score(str(truth), truth) == 0.5 - the scorer cannot parse its own tuple truth.",
       "file": "generators/MasterControl.py",
       "sha256": "cfd84bb4b5503916ab95f745b3d8ad46887051cfc01433e7ee5d16d983e66290",
@@ -111,13 +194,35 @@
         "medium": 300468,
         "large": 1200856
       },
-      "self_test_exit": 1
+      "self_test_exit": 1,
+      "original_status": "defect: scorer",
+      "fix_attempts": [
+        {
+          "by": "MasterControl (mistral-medium-3.1) - original author, given the validator's findings",
+          "file": "fixed/self/MasterControl.py",
+          "sha256": "9fa3027d5ac6447c4c7fb887e339df3e0f6cb3db9f5fa6efd92de91029499c70",
+          "request": "fixed/self/requests/MasterControl.md",
+          "response": "fixed/self/answers/MasterControl.md",
+          "result": "pass"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed, all five in one session",
+          "file": "fixed/minimax/MasterControl.py",
+          "sha256": "3a36051d3aa5e8e90acabbd15ce6769a6569f520cb6ed478ffbcc41a5e82cf34",
+          "notes": "fixed/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
+      "active": {
+        "file": "fixed/active/MasterControl.py",
+        "sha256": "9fa3027d5ac6447c4c7fb887e339df3e0f6cb3db9f5fa6efd92de91029499c70",
+        "source": "self-fix"
+      }
     },
     "Multivac": {
       "vendor": "nousresearch",
       "model": "hermes-4-405b",
       "harness": "http (OpenRouter)",
-      "status": "defect: size",
       "task": "Requirements log with merges/splits: current status and description of a requirement. Contexts are 2.7K/6K/16K chars instead of ~60K/300K/1.2M.",
       "file": "generators/Multivac.py",
       "sha256": "87e1a66dfc9e4113ad80972fa15f97d272d1a2746523a8614d54dad9d8e0c512",
@@ -126,7 +231,31 @@
         "medium": 6068,
         "large": 15836
       },
-      "self_test_exit": 0
+      "self_test_exit": 0,
+      "original_status": "defect: size",
+      "fix_attempts": [
+        {
+          "by": "Multivac (hermes-4-405b) - original author, given the validator's findings",
+          "file": "fixed/self/Multivac.py",
+          "sha256": "9e3cfad29609bbd30be1d12ee1c9e766dfed9a07536206c16c80370e12981318",
+          "request": "fixed/self/requests/Multivac.md",
+          "response": "fixed/self/answers/Multivac.md",
+          "result": "fail: sizes ~1.5x target; score(str(truth)) = 0.5"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed, all five in one session",
+          "file": "fixed/minimax/Multivac.py",
+          "sha256": "055da66d1dc41f0d378a326139b18fa05f28fa90f3a6b728ef9275c9abd79284",
+          "notes": "fixed/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
+      "active": {
+        "file": "fixed/active/Multivac.py",
+        "sha256": "055da66d1dc41f0d378a326139b18fa05f28fa90f3a6b728ef9275c9abd79284",
+        "source": "minimax-fix"
+      }
     }
-  }
+  },
+  "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent."
 }
