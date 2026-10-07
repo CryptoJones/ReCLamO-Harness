@@ -64,7 +64,7 @@ Five originals failed. They were **not** left broken. Each repair went the same 
 | GLaDOS | xAI grok-4.6 | Transit co-op records: net authorized amount and certifying member for the current legal successor of a renamed project, under bylaws and SOP | pass | original |
 | SHODAN | OpenAI gpt-6-astra | Month-end packet: per-office freight credits after signed corrections, custody findings and agreement terms | pass | original |
 | TheDixieFlatline | Google gemini-3.1-pro-high | Chain of custody: final room of an asset through renames and transfers (medium size ≈260K) | pass | original |
-| Cerebex | Z-AI glm-5.3-flash | Expense emails: travel total after amendments and reversals | self-test collided when truth = 0 | **author's fix** |
+| Cerebex | Z-AI glm-5.3-flash | Expense emails: travel total after amendments and reversals | self-test collided when truth = 0; f-string syntax invalid on Python 3.11 | **author's fix** + MiniMax 3.11 syntax patch (output byte-identical) |
 | Neuromancer | DeepSeek v4-flash | March travel reimbursed after adjustments and denials | small size degenerate ($0); lenient scorer | **author's fix** |
 | SELMA | NVIDIA Nemotron 3 Super | Final owner of a review after reassignments in an email thread | depended on `PYTHONHASHSEED` | **author's fix** |
 | MasterControl | Mistral Medium 3.1 | Only employee flagged for two audit issues, plus their total | scorer regex split `39195` into `391`/`95` | **author's fix** |

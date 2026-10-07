@@ -100,12 +100,20 @@
           "sha256": "077223423d42e7adced558ecf673c9199e97d47529b9ca3ba8f89babea7b0288",
           "notes": "fixed/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/minimax/Cerebex-py311.py",
+          "sha256": "516acce16351c7709e3a7d274d2c5a064d66ef3f5c47d449fda8e967199bb3f7",
+          "notes": "fixed/minimax/TASK-py311.md",
+          "result": "pass",
+          "change": "Author's self-fix put a \\u2019 escape inside an f-string expression (valid on 3.12, SyntaxError on 3.11; the brief requires 3.11). Hoisted the string into a module constant; output byte-identical to the author's fix on 3.11 and 3.12."
         }
       ],
       "active": {
         "file": "fixed/active/Cerebex.py",
-        "sha256": "2f991921afdf7d2a9115272a644278e97175c9a6c0598b6996efbeededea4767",
-        "source": "self-fix"
+        "sha256": "516acce16351c7709e3a7d274d2c5a064d66ef3f5c47d449fda8e967199bb3f7",
+        "source": "self-fix + minimax py3.11 syntax patch"
       }
     },
     "Neuromancer": {
