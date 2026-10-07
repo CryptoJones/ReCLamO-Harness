@@ -60,7 +60,7 @@ thinking request, and reports latency, token usage and whether reasoning came ba
 | `--no-thinking` | disable thinking on root turns |
 | `--json` | print the full result (answer, turns, sub-calls, usage, stop reason, trajectory path) as JSON |
 | `--sft` | also write the SFT file (see below) |
-| `--sandbox {subprocess,docker}` | where generated code runs; `docker` arrives with [#6](https://github.com/CryptoJones/ReCLamO-Harness/issues/6) |
+| `--sandbox {subprocess,docker}` | where generated code runs (default `subprocess`) |
 
 Exit codes: `0` an answer was produced (including a forced finish when turns run out),
 `3` a limit stopped the run (timeout, consecutive REPL errors, token budget; any
@@ -176,10 +176,26 @@ Live tests (`uv run pytest -m live`) run `ping`, a thinking round trip and a
 
 ## Results
 
-Filled in from `examples/eval.py` output against pluto.
+`examples/eval.py --profile pluto`, seed 0, run 2026-10-07 against
+`huihui-qwen3.8-flash-next-abliterated` (Qwen3.8-Flash-Next, UD-Q4_K_XL) served by
+Strata on pluto (V100 32 GB + P100 16 GB + RTX 3060 12 GB, one request at a time,
+32K resident KV). Default `pluto` profile: root thinking on, sub-calls thinking off,
+`subcall_chars=12000`, depth 1.
 
 | Task | Result | Turns | Sub-calls | Tokens | Seconds |
 |---|---|---|---|---|---|
+| needle (1,000,000 lines, ~30 MB) | found | 4 | 0 | 7,022 | 18.6 |
+| oolong_lite (300 tickets, 5 categories) | exact: total abs error 0 | 6 | 3 | 21,279 | 127.7 |
+
+Notes:
+
+- The needle is solvable with code alone; Qwen scans for the odd line and never needs a
+  sub-call. The context is ~1,000x the model's resident window.
+- OOLONG-lite cannot be grepped. Qwen batched the tickets into **3** `llm_query` calls
+  of ~100 tickets each and aggregated in the REPL, instead of one call per ticket. That
+  is the over-calling failure the RLM paper reports for Qwen3-Coder (hundreds of calls
+  per task), held off here by the batching instruction plus hard caps in code.
+- One run per task; treat these as smoke results, not a benchmark.
 
 ## Development
 
