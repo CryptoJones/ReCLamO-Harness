@@ -61,6 +61,7 @@ thinking request, and reports latency, token usage and whether reasoning came ba
 | `--json` | print the full result (answer, turns, sub-calls, usage, stop reason, trajectory path) as JSON |
 | `--sft` | also write the SFT file (see below) |
 | `--sandbox {subprocess,docker}` | where generated code runs (default `subprocess`) |
+| `--protocol {fence,tools}` | how the root model acts: fenced code + `FINAL` text (default), or `execute_python` / `final_answer` tool calls (see *Protocol* under Results) |
 
 Exit codes: `0` an answer was produced (including a forced finish when turns or time
 run out: whatever the REPL already holds, else one last "out of time" call), `3` a
@@ -279,6 +280,81 @@ Findings:
   head of the context, cut to fit) exists in `bench.py` but is not reported: an early
   version under-estimated digit-heavy text and sent prompts too long for the 300 s
   request timeout. It is fixed, but has not been re-run.
+
+### Protocol: fenced code vs tool calls
+
+[#20](https://github.com/CryptoJones/ReCLamO-Harness/issues/20). `--protocol tools`
+(config `protocol = "tools"`) has the root model act through OpenAI-style function
+calls instead of fenced code and `FINAL(...)` text. `execute_python(code)` returns the
+REPL output, with the same truncation and sub-call caps. `final_answer(answer=... |
+variable=...)` finishes; it takes exactly one of the two, and `variable` must exist.
+
+The history stays append-only. Each turn adds the assistant message with its
+`tool_calls`, then one `tool` message per call in call order, then a user message with
+any notes and the next `Turn i/N` line. The guards from the fence protocol still apply:
+a final sent next to code is rejected, a plan-like final is rejected once, the
+re-verify and decompose nudges fire, and the forced finish and the timeouts work the
+same way.
+
+A reply with no tool call gets a nudge. A fenced block or a `FINAL(...)` written as text
+is honoured once and logged as a protocol slip. The fence prompt is unchanged. Strata
+returns structured `tool_calls` for Qwen3.8-Flash-Next, so there is no text-parsing
+fallback.
+
+Run 2026-10-07 on the same server and profile as above. Both protocols were
+interleaved per seed, and each row took the pluto lock on its own. `bench.py --modes rlm
+--protocol {fence,tools} --seeds 3` gives the raw rows in
+`runs/proto-bench-20261007.json` (not in git). "Syntax errors" counts executed blocks
+whose error was a `SyntaxError`. "Slips" counts the protocol slips above, plus fence
+replies with neither code nor a final.
+
+| Task | Size | Protocol | Result over 3 seeds | Final rejections | Slips | Syntax errors / execs | Median turns | Median s |
+|---|---|---|---|---|---|---|---|---|
+| needle | 100,000 lines | fence | 3/3 found | 0 | 0 | 0/6 | 3 | 14.9 |
+| needle | 100,000 lines | tools | 3/3 found | 0 | 0 | 0/6 | 3 | 18.1 |
+| oolong_lite | 300 tickets | fence | exact 3/3 | 0 | 0 | 0/17 | 7 | 121 |
+| oolong_lite | 300 tickets | tools | exact 3/3 | 0 | 0 | 0/21 | 7 | 244 |
+| oolong_lite | 1,000 tickets | fence | exact 3/3 | 0 | 0 | 0/27 | 10 | 454 |
+| oolong_lite | 1,000 tickets | tools | exact 3/3 | 0 | 0 | 0/14 | 5 | 304 |
+| longdoc_qa | 300 sections | fence | 6/9 questions (one seed out of turns) | 0 | 0 | 0/44 | 15 | 134 |
+| longdoc_qa | 300 sections | tools | 9/9 questions | 0 | 0 | 0/30 | 11 | 94 |
+
+The independent eval set (`evals/independent/fixed/active/`, size medium, seed 0) was
+run as a protocol comparison only; nothing was tuned on it, because it is reserved for
+the frozen [#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22) eval. Raw
+rows are in `runs/proto-indep-20261007.json`, with `max_timeout=900`.
+
+| Protocol | Mean score (8 tasks) | Exact | Final rejections | Slips | Syntax errors / execs | Median turns | Median s |
+|---|---|---|---|---|---|---|---|
+| fence | 0.28 | 2/8 (MasterControl, SELMA) | 0 | 2 (no code, no final) | 0/113 | 19.5 | 231 |
+| tools | 0.40 | 3/8 (MasterControl, SELMA, Neuromancer) | 0 | 0 | 0/125 | 19 | 209 |
+
+Findings:
+
+- **The protocol errors #20 set out to remove do not occur any more.** Over 24 bench
+  runs and 16 independent runs, neither protocol produced a syntax error or a rejected
+  final. Qwen never slipped out of the tools protocol: no text-only replies, no fenced
+  code, no malformed arguments. The fence protocol had two turns with neither code nor
+  a final, both on independent tasks the model failed anyway. The prompt and parser
+  tuning in #7 already removed what the tools protocol would have fixed.
+- **Accuracy is the same within noise.** Each protocol's extra wins come from a single
+  run. Fence lost one longdoc_qa seed by searching for 20 turns, after which the forced
+  finish returned its reasoning text. That task got 9/9 with fence in the #19
+  benchmark. Tools won Neuromancer only through the forced finish, which picked up an
+  answer already sitting in a REPL variable. Both protocols failed the same five
+  independent tasks; three of them ran out of turns.
+- **Speed is mixed.** Tools was faster on longdoc_qa (94 vs 134 s), on 1,000 tickets
+  (304 vs 454 s) and on the independent set (209 vs 231 s). It was twice as slow on 300
+  tickets (244 vs 121 s): it chose 50-ticket batches and a verification pass where
+  fence used three 100-ticket calls. That is a strategy difference, not a protocol
+  error. Tool turns also cost more prompt tokens, because of the tool schemas and the
+  JSON-escaped code.
+- **The default stays `fence`.** Tools is not clearly better: it has no error rate to
+  improve and it ties on accuracy. `--protocol tools` is supported and tested for
+  servers or models whose fenced-code output is less reliable. Its stats show up in
+  every trajectory's `final` record and in bench rows, so the comparison can be re-run
+  cheaply. With three seeds and one run per independent task, these are observations,
+  not significance tests.
 
 ### Depth-2 recursion
 
