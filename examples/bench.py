@@ -10,10 +10,12 @@ Tasks come from the sibling examples (``needle``, ``oolong_lite``, ``longdoc_qa`
 this file adds the grid, the modes and the bookkeeping:
 
 - ``rlm``: the harness, through the library API.
-- ``plain``: one chat call with the whole context in the prompt, the paper's
-  baseline. It runs only when the prompt fits the model's usable window
-  (``context_tokens`` minus the root output reserve, at ``CHARS_PER_TOKEN``
-  chars per token); otherwise the row records ``does not fit`` and no call.
+- ``plain``: the whole context in one prompt, the paper's baseline. It runs
+  only when the prompt fits the model's usable window (``context_tokens`` minus
+  the root output reserve, at ``CHARS_PER_TOKEN`` chars per token); otherwise
+  the row records ``does not fit`` and no call. Each plain row makes two calls,
+  thinking on (with a generous output budget, capped by what fits beside the
+  prompt) and thinking off, keeps both, and reports the better one.
 - ``plain_truncated`` (opt-in): the same call with the context cut to fit,
   clearly labelled; it shows what a window-limited model gets.
 
@@ -65,6 +67,9 @@ DEFAULT_GRID: tuple[tuple[str, int], ...] = (
 # Needle position cycles through start / middle / end as the seed advances, so
 # three seeds cover the cases a truncated baseline gets right and wrong.
 NEEDLE_POSITIONS = (0.05, 0.5, 0.95)
+# Output budget for a plain call, capped by what fits beside the prompt. Generous on
+# purpose: the first live rows showed thinking alone exhausting a 4096 cap.
+PLAIN_MAX_TOKENS = 16384
 PLAIN_SYSTEM = (
     "You are a careful analyst. The user message holds a document between the "
     "markers and then a question about it. Answer from the document only."
@@ -256,7 +261,78 @@ def run_rlm(cfg: RLMConfig, client: Any, inst: Instance, log_dir: str | None) ->
     }
 
 
-def run_plain(cfg: RLMConfig, client: Any, inst: Instance, *, truncated: bool) -> dict[str, Any]:
+def plain_output_tokens(cfg: RLMConfig, est_prompt_tokens: int, plain_max_tokens: int) -> int:
+    """Output budget for a plain call: generous, but never past what fits beside the prompt."""
+    beside = cfg.context_tokens - est_prompt_tokens
+    return max(cfg.root.max_tokens, min(plain_max_tokens, beside))
+
+
+def _plain_variant(
+    client: Any, messages: list[dict[str, str]], spec: TaskSpec, truth: Any, *,
+    enable_thinking: bool, max_tokens: int,
+) -> dict[str, Any]:  # fmt: skip
+    started = time.monotonic()
+    try:
+        c = client.complete(
+            messages, "root", enable_thinking=enable_thinking, max_tokens=max_tokens
+        )
+    except Exception as exc:
+        return {
+            "answer": "",
+            "score": 0.0 if spec.metric == "accuracy" else None,
+            "correct": False,
+            "tokens": None,
+            "seconds": round(time.monotonic() - started, 2),
+            "stop_reason": "error",
+            "error": f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
+        }
+    scored = spec.score(c.content, truth)
+    usage = c.usage
+    return {
+        "answer": c.content[:2000],
+        "score": scored.score,
+        "correct": scored.correct,
+        **scored.detail,
+        "tokens": usage.total_tokens if usage else None,
+        "prompt_tokens": usage.prompt_tokens if usage else None,
+        "completion_tokens": usage.completion_tokens if usage else None,
+        "reasoning_chars": len(c.reasoning or ""),
+        "content_from_reasoning": c.content_from_reasoning,
+        "seconds": round(c.latency, 2),
+        "stop_reason": c.finish_reason or "stop",
+        "error": None,
+    }
+
+
+def better_variant(metric: str, variants: dict[str, dict[str, Any]]) -> str:
+    """Name of the better-scoring variant; ties go to the first (thinking) one."""
+    best: str | None = None
+    for name, v in variants.items():
+        if best is None:
+            best = name
+            continue
+        a, b = v.get("score"), variants[best].get("score")
+        if a is None:
+            continue
+        if b is None or (a > b if metric == "accuracy" else a < b):
+            best = name
+    assert best is not None
+    return best
+
+
+def run_plain(
+    cfg: RLMConfig,
+    client: Any,
+    inst: Instance,
+    *,
+    truncated: bool,
+    plain_max_tokens: int = PLAIN_MAX_TOKENS,
+) -> dict[str, Any]:
+    """Best of two single calls: thinking on (generous output budget) and thinking off.
+
+    Both variants are kept in the row under ``variants``; the top-level fields are
+    the chosen one's, so the summary reports the better of the two.
+    """
     spec = TASKS[inst.task]
     fits, est, budget = fit_decision(cfg, inst.context, inst.query)
     row: dict[str, Any] = {"fits": fits, "est_prompt_tokens": est, "usable_tokens": budget}
@@ -267,6 +343,9 @@ def run_plain(cfg: RLMConfig, client: Any, inst: Instance, *, truncated: bool) -
         else:
             context, kept = truncate_to_fit(cfg, inst.context, inst.query)
             row["kept_fraction"] = round(kept, 4)
+            est = estimate_tokens(
+                "".join(m["content"] for m in plain_messages(context, inst.query))
+            )
     elif not fits:
         row.update(
             answer=None,
@@ -282,46 +361,39 @@ def run_plain(cfg: RLMConfig, client: Any, inst: Instance, *, truncated: bool) -
         )
         return row
     messages = plain_messages(context, inst.query)
-    started = time.monotonic()
-    try:
-        completion = client.complete(messages, "root")
-    except Exception as exc:
-        row.update(
-            answer="",
-            score=0.0 if spec.metric == "accuracy" else None,
-            correct=False,
-            turns=1,
-            subcalls=0,
-            tokens=None,
-            seconds=round(time.monotonic() - started, 2),
-            stop_reason="error",
-            error=f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
-            trajectory=None,
-        )
-        return row
-    scored = spec.score(completion.content, inst.truth)
-    usage = completion.usage
+    max_tokens = plain_output_tokens(cfg, est, plain_max_tokens)
+    variants = {
+        "thinking": _plain_variant(
+            client, messages, spec, inst.truth, enable_thinking=True, max_tokens=max_tokens
+        ),
+        "nothink": _plain_variant(
+            client, messages, spec, inst.truth, enable_thinking=False, max_tokens=max_tokens
+        ),
+    }
+    chosen = better_variant(spec.metric, variants)
+    row.update(variants[chosen])
     row.update(
-        answer=completion.content[:2000],
-        score=scored.score,
-        correct=scored.correct,
-        **scored.detail,
         turns=1,
         subcalls=0,
-        tokens=usage.total_tokens if usage else None,
-        prompt_tokens=usage.prompt_tokens if usage else None,
-        completion_tokens=usage.completion_tokens if usage else None,
-        reasoning_chars=len(completion.reasoning or ""),
-        seconds=round(completion.latency, 2),
-        stop_reason=completion.finish_reason or "stop",
-        error=None,
         trajectory=None,
+        plain_max_tokens=max_tokens,
+        chosen=chosen,
+        seconds_both=round(sum(v["seconds"] for v in variants.values()), 2),
+        variants=variants,
     )
     return row
 
 
 def run_row(
-    cfg: RLMConfig, client: Any, task: str, size: int, mode: str, seed: int, log_dir: str | None
+    cfg: RLMConfig,
+    client: Any,
+    task: str,
+    size: int,
+    mode: str,
+    seed: int,
+    log_dir: str | None,
+    *,
+    plain_max_tokens: int = PLAIN_MAX_TOKENS,
 ) -> dict[str, Any]:
     inst = build_instance(task, size, seed)
     row: dict[str, Any] = {
@@ -337,9 +409,9 @@ def run_row(
     if mode == "rlm":
         row.update(run_rlm(cfg, client, inst, log_dir))
     elif mode == "plain":
-        row.update(run_plain(cfg, client, inst, truncated=False))
+        row.update(run_plain(cfg, client, inst, truncated=False, plain_max_tokens=plain_max_tokens))
     elif mode == "plain_truncated":
-        row.update(run_plain(cfg, client, inst, truncated=True))
+        row.update(run_plain(cfg, client, inst, truncated=True, plain_max_tokens=plain_max_tokens))
     else:
         raise ValueError(f"unknown mode {mode!r}; expected one of {', '.join(MODES)}")
     return row
@@ -621,6 +693,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-timeout", type=float, default=600.0, help="seconds per RLM run (default 600)"
     )
+    parser.add_argument(
+        "--plain-max-tokens",
+        type=int,
+        default=PLAIN_MAX_TOKENS,
+        help="output budget for plain calls, capped by what fits (default %(default)s)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan; call no model")
     return parser
 
@@ -688,6 +766,8 @@ def main(argv: list[str] | None = None) -> int:
         "usable_tokens": usable_tokens(cfg),
         "chars_per_token": CHARS_PER_TOKEN,
         "root_max_tokens": cfg.root.max_tokens,
+        "plain_max_tokens": args.plain_max_tokens,
+        "plain_rule": "best of thinking-on and thinking-off single calls",
         "max_timeout": cfg.max_timeout,
         "subcall_chars": cfg.subcall_chars,
         "max_depth": cfg.max_depth,
@@ -698,7 +778,16 @@ def main(argv: list[str] | None = None) -> int:
     meta["batches"].append({"at": stamp, "grid": grid, "modes": modes, "seeds": seeds})
 
     def runner(task: str, size: int, mode: str, seed: int) -> dict[str, Any]:
-        return run_row(cfg, client, task, size, mode, seed, args.log_dir)
+        return run_row(
+            cfg,
+            client,
+            task,
+            size,
+            mode,
+            seed,
+            args.log_dir,
+            plain_max_tokens=args.plain_max_tokens,
+        )
 
     def save(_row: dict[str, Any]) -> None:
         write_rows(out, meta, rows)

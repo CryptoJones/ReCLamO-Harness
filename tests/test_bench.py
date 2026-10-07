@@ -191,12 +191,13 @@ def test_plain_truncated_mode_calls_with_a_cut_context() -> None:
     cfg.context_tokens = 2000
     cfg.root.max_tokens = 100
     inst = bench.build_instance("needle", 500, 2)  # needle near the end: cut away
-    lm = MockLM(root=["I cannot find it"])
+    lm = MockLM(root=["I cannot find it", "Not in the document"])
     row = bench.run_row(cfg, lm, "needle", 500, "plain_truncated", 2, None)
     assert row["mode"] == "plain_truncated" and 0 < row["kept_fraction"] < 1
     sent = lm.root_calls[0]["messages"][-1]["content"]
     assert inst.truth not in sent and sent.startswith("=== DOCUMENT ===\nrecord 0:")
     assert row["score"] == 0.0 and row["correct"] is False and row["turns"] == 1
+    assert row["chosen"] == "thinking" and set(row["variants"]) == {"thinking", "nothink"}
 
 
 # --- rows through the library API (MockLM, real subprocess REPL) ----------------------
@@ -206,12 +207,16 @@ def test_run_row_plain_scores_oolong() -> None:
     cfg = make_config("http://x")
     inst = bench.build_instance("oolong_lite", 20, 0)
     perfect = "\n".join(f"{cat}: {n}" for cat, n in inst.truth.items())
-    lm = MockLM(root=[perfect])
+    off_by_two = perfect.replace(f": {inst.truth['billing']}", f": {inst.truth['billing'] + 2}", 1)
+    lm = MockLM(root=[off_by_two, perfect])  # thinking variant first, then thinking off
     row = bench.run_row(cfg, lm, "oolong_lite", 20, "plain", 0, None)
     assert row["fits"] and row["score"] == 0.0 and row["correct"] is True
+    assert row["chosen"] == "nothink" and row["variants"]["thinking"]["score"] == 2.0
     assert row["stop_reason"] == "stop" and row["tokens"] == 15 and row["subcalls"] == 0
+    assert row["seconds_both"] == 0.0
     sent = lm.root_calls[0]["messages"]
     assert sent[0]["role"] == "system" and "Ticket 1: " in sent[1]["content"]
+    assert [c["enable_thinking"] for c in lm.root_calls] == [True, False]
 
 
 def test_run_row_rlm_needle_with_scripted_model(tmp_path: Path) -> None:
@@ -478,3 +483,55 @@ def test_summary_only_reads_an_existing_file(tmp_path: Path) -> None:
 def test_bad_grid_and_mode_exit_2() -> None:
     assert _cli("--dry-run", "--grid", "nope:1", "--profile", "openai-compatible").returncode == 2
     assert _cli("--dry-run", "--modes", "magic", "--profile", "openai-compatible").returncode == 2
+
+
+def test_plain_output_budget_is_generous_but_fits_beside_the_prompt() -> None:
+    cfg = make_config("http://x")  # 32768 window, root max_tokens 4096
+    assert bench.plain_output_tokens(cfg, 2_000, 16_384) == 16_384
+    assert bench.plain_output_tokens(cfg, 24_000, 16_384) == 8_768
+    assert bench.plain_output_tokens(cfg, 30_000, 16_384) == 4_096  # never below the root cap
+
+
+def test_plain_passes_the_output_budget_and_keeps_both_variants() -> None:
+    from reclamo.client import Completion, Usage
+
+    cfg = make_config("http://x")
+    inst = bench.build_instance("needle", 20, 0)
+    starved = Completion(
+        content="I am still thinking about which line",
+        reasoning="I am still thinking about which line",
+        usage=Usage(100, 4096, 4196),
+        finish_reason="length",
+        latency=5.0,
+        content_from_reasoning=True,
+    )
+    lm = MockLM(root=[starved, f"The passphrase is {inst.truth}"])
+    row = bench.run_row(cfg, lm, "needle", 20, "plain", 0, None, plain_max_tokens=16_384)
+    assert row["plain_max_tokens"] == 16_384
+    assert row["chosen"] == "nothink" and row["score"] == 1.0 and row["stop_reason"] == "stop"
+    thinking = row["variants"]["thinking"]
+    assert thinking["stop_reason"] == "length" and thinking["content_from_reasoning"]
+    assert thinking["score"] == 0.0 and thinking["tokens"] == 4196
+    assert row["seconds"] == 0.0 and row["seconds_both"] == 5.0
+    assert [c["enable_thinking"] for c in lm.root_calls] == [True, False]
+
+
+def test_better_variant_rules() -> None:
+    acc = {"thinking": {"score": 1.0}, "nothink": {"score": 1.0}}
+    assert bench.better_variant("accuracy", acc) == "thinking"  # tie -> thinking
+    assert (
+        bench.better_variant("accuracy", {"thinking": {"score": 0.0}, "nothink": {"score": 0.5}})
+        == "nothink"
+    )
+    assert (
+        bench.better_variant("abs_error", {"thinking": {"score": 4.0}, "nothink": {"score": 1.0}})
+        == "nothink"
+    )
+    assert (
+        bench.better_variant("abs_error", {"thinking": {"score": None}, "nothink": {"score": 9.0}})
+        == "nothink"
+    )
+    assert (
+        bench.better_variant("abs_error", {"thinking": {"score": 2.0}, "nothink": {"score": None}})
+        == "thinking"
+    )
