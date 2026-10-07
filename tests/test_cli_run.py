@@ -180,3 +180,38 @@ def test_load_context_dir_and_stdin(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     (tmp_path / "empty").mkdir()
     with pytest.raises(ConfigError, match="no readable text files"):
         load_context(str(tmp_path / "empty"))
+
+
+def test_run_reports_non_final_stop_reason(
+    fake_server: FakeServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("RECLAMO_API_KEY", "sk-test")
+    fake_server.script(chat_response("```repl\nfinal_answer = 'forced'\n```"))
+    profiles = _profiles_file(tmp_path, fake_server.base_url)
+    ctx = tmp_path / "ctx.txt"
+    ctx.write_text("x", encoding="utf-8")
+    rc = main(
+        [
+            "run",
+            "--profile",
+            "fake",
+            "--profiles",
+            str(profiles),
+            "--context",
+            str(ctx),
+            "-q",
+            "?",
+            "--log-dir",
+            str(tmp_path / "runs"),
+            "--max-iterations",
+            "1",
+            "--sandbox",
+            "subprocess",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert rc == 0 and captured.out == "forced\n"
+    assert "stopped by max_iterations; the answer may be incomplete" in captured.err

@@ -19,6 +19,7 @@ from reclamo import __version__
 from reclamo.client import LMClient
 from reclamo.config import APIKeyError, ConfigError, RLMConfig, load_config, resolve_api_key
 from reclamo.errors import RLMError
+from reclamo.repl import DockerUnavailable
 
 EXIT_OK = 0
 EXIT_OTHER = 1
@@ -54,6 +55,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--no-thinking", action="store_true", help="disable thinking on root turns")
     run.add_argument("--json", action="store_true", help="print the result as JSON")
     run.add_argument("--sft", action="store_true", help="also write <run>.sft.jsonl")
+    run.add_argument(
+        "--sandbox",
+        choices=("subprocess", "docker"),
+        default=None,
+        help="where model-written code runs (default: the profile's sandbox, subprocess)",
+    )
     run.set_defaults(func=cmd_run)
     return parser
 
@@ -158,6 +165,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides["sft_log"] = True
     if args.no_thinking:
         overrides["root"] = dataclasses.replace(cfg.root, enable_thinking=False)
+    if args.sandbox:
+        overrides["sandbox"] = args.sandbox
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
         client.cfg = cfg
@@ -186,7 +195,15 @@ def cmd_run(args: argparse.Namespace) -> int:
     except openai.APIError as exc:
         print(f"reclamo run: request failed: {_short(exc)}", file=sys.stderr)
         return EXIT_OTHER
+    except DockerUnavailable as exc:
+        print(f"reclamo run: {exc}", file=sys.stderr)
+        return EXIT_CONFIG
 
+    if result.stop_reason not in ("final", "final_var", "answer_dict"):
+        print(
+            f"reclamo run: stopped by {result.stop_reason}; the answer may be incomplete",
+            file=sys.stderr,
+        )
     if args.json:
         print(json.dumps(dataclasses.asdict(result), ensure_ascii=False, indent=2))
     else:

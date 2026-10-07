@@ -361,3 +361,13 @@ def test_json_context_reaches_repl() -> None:
         context={"b.txt": "two", "a.txt": "one"},
     )
     assert result.answer == "ok"
+
+
+def test_ready_answer_wins_over_error_limit() -> None:
+    cfg = _cfg(max_errors=1)
+    code = (
+        "```repl\nanswer['content'] = 'done'\nanswer['ready'] = True\n```\n```repl\nx = 1 / 0\n```"
+    )
+    result, lm = _run([code], cfg=cfg)
+    assert (result.answer, result.stop_reason) == ("done", "answer_dict")
+    assert len(lm.root_calls) == 1
