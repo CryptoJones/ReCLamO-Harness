@@ -226,18 +226,23 @@ class SubprocessREPL(REPL):
                         subcalls=int(msg.get("subcalls") or 0),
                     )
         except TimeoutError:
-            self._restart()
-            return ExecResult(
-                error=f"timeout after {timeout:g}s; REPL restarted, variables lost",
-                restarted=True,
-            )
+            return self._recover(f"timeout after {timeout:g}s")
         except WorkerDied as exc:
             detail = str(exc).splitlines()[-1] if str(exc) else "no output"
+            return self._recover(f"REPL crashed ({detail})")
+
+    def _recover(self, what: str) -> ExecResult:
+        """Relaunch the worker after ``what`` went wrong; report either outcome."""
+        try:
             self._restart()
+        except (TimeoutError, WorkerDied, OSError) as exc:
+            self._stop_worker(graceful=False)  # leaves _proc=None: next call fails loudly
+            detail = str(exc).strip().splitlines()[-1] if str(exc).strip() else type(exc).__name__
             return ExecResult(
-                error=f"REPL crashed ({detail}); REPL restarted, variables lost",
+                error=f"{what}; REPL could not be restarted: {detail}",
                 restarted=True,
             )
+        return ExecResult(error=f"{what}; REPL restarted, variables lost", restarted=True)
 
     def _handle_llm_request(self, msg: dict[str, Any]) -> dict[str, Any]:
         kind = str(msg.get("kind") or "llm_query")
@@ -268,7 +273,7 @@ class SubprocessREPL(REPL):
                         value_str=msg.get("value_str"),
                     )
         except (TimeoutError, WorkerDied):
-            self._restart()
+            self._recover("get_var failed")
             return VarResult(name=name, found=False)
 
 

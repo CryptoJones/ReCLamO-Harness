@@ -43,8 +43,11 @@ class _Protocol:
     """Owns the two protocol streams and the request ids."""
 
     def __init__(self) -> None:
+        # Private copies of the real stdio fds. main() then repoints fd 0 and
+        # fd 1 so user code (or anything it spawns) can neither read protocol
+        # messages nor write into the protocol stream.
         self.out = os.fdopen(os.dup(1), "w", buffering=1, encoding="utf-8")
-        self.inp = open(0, encoding="utf-8", closefd=False)
+        self.inp = os.fdopen(os.dup(0), encoding="utf-8")
         self.next_id = 0
 
     def send(self, msg: dict[str, Any]) -> None:
@@ -306,6 +309,12 @@ def main() -> int:
     # stderr so nothing else (C extensions, os.write(1, ...)) can write into it.
     os.dup2(2, 1)
     sys.stdout = io.TextIOWrapper(os.fdopen(os.dup(2), "wb"), encoding="utf-8", line_buffering=True)
+    # fd 0 is the protocol's only route in; point it at /dev/null so user code
+    # and any subprocess it spawns read EOF instead of eating protocol lines.
+    devnull = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(devnull, 0)
+    os.close(devnull)
+    sys.stdin = io.StringIO("")
     builtins.input = _no_input
     Worker(proto).serve()
     return 0

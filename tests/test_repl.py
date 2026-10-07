@@ -329,3 +329,40 @@ def test_context_manager(handler: Handler) -> None:
         r.start("ctx")
         assert r.execute("len(context)").stdout == "3\n"
     assert r._proc is None
+
+
+# --- stdin isolation and restart failure ---------------------------------------
+
+
+def test_user_code_cannot_read_protocol_from_stdin(repl: SubprocessREPL) -> None:
+    res = repl.execute("import sys\nprint(repr(sys.stdin.read()))")
+    assert res.ok and res.stdout == "''\n"
+    assert repl.execute("1 + 1").stdout == "2\n"
+
+
+def test_spawned_subprocess_does_not_inherit_protocol_stdin(repl: SubprocessREPL) -> None:
+    code = (
+        "import subprocess, sys\n"
+        "r = subprocess.run([sys.executable, '-c', 'import sys; print(len(sys.stdin.read()))'],"
+        " capture_output=True, text=True)\n"
+        "print(r.stdout.strip(), r.returncode)"
+    )
+    res = repl.execute(code)
+    assert res.ok and res.stdout == "0 0\n"
+    assert repl.execute("print('alive')").stdout == "alive\n"
+
+
+def test_restart_failure_is_reported_and_next_execute_fails_loudly(handler: Handler) -> None:
+    r = SubprocessREPL(_cfg(exec_timeout=0.5), handler)
+    r.start("ctx")
+    try:
+        r._python = "/nonexistent/python"  # the relaunch cannot succeed
+        res = r.execute("import time\ntime.sleep(30)")
+        assert res.restarted
+        assert res.error is not None
+        assert res.error.startswith("timeout after 0.5s; REPL could not be restarted:")
+        assert r._proc is None
+        with pytest.raises(RuntimeError, match="call start\\(\\) first"):
+            r.execute("1")
+    finally:
+        r.close()
