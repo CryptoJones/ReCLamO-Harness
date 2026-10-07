@@ -517,8 +517,10 @@ def test_plain_passes_the_output_budget_and_keeps_both_variants() -> None:
 
 
 def test_better_variant_rules() -> None:
-    acc = {"thinking": {"score": 1.0}, "nothink": {"score": 1.0}}
-    assert bench.better_variant("accuracy", acc) == "thinking"  # tie -> thinking
+    tie = {"thinking": {"score": 1.0, "seconds": 150.0}, "nothink": {"score": 1.0, "seconds": 9.0}}
+    assert bench.better_variant("accuracy", tie) == "nothink"  # tie on score -> faster
+    tie["nothink"]["seconds"] = 150.0
+    assert bench.better_variant("accuracy", tie) == "thinking"  # full tie -> thinking
     assert (
         bench.better_variant("accuracy", {"thinking": {"score": 0.0}, "nothink": {"score": 0.5}})
         == "nothink"
@@ -535,3 +537,16 @@ def test_better_variant_rules() -> None:
         bench.better_variant("abs_error", {"thinking": {"score": 2.0}, "nothink": {"score": None}})
         == "thinking"
     )
+
+
+def test_load_rows_reapplies_the_choice_rule(tmp_path: Path) -> None:
+    row = _row("needle", 5, "plain", 0, chosen="thinking", seconds=150.0)
+    row["variants"] = {
+        "thinking": {"score": 1.0, "correct": True, "seconds": 150.0, "stop_reason": "stop"},
+        "nothink": {"score": 1.0, "correct": True, "seconds": 9.0, "stop_reason": "stop"},
+    }
+    out = tmp_path / "b.json"
+    bench.write_rows(out, {}, [row, _row("needle", 5, "rlm", 0)])
+    _meta, rows = bench.load_rows(out)
+    assert rows[0]["chosen"] == "nothink" and rows[0]["seconds"] == 9.0
+    assert rows[0]["seconds_both"] == 159.0 and "variants" not in rows[1]

@@ -305,19 +305,28 @@ def _plain_variant(
 
 
 def better_variant(metric: str, variants: dict[str, dict[str, Any]]) -> str:
-    """Name of the better-scoring variant; ties go to the first (thinking) one."""
-    best: str | None = None
-    for name, v in variants.items():
-        if best is None:
-            best = name
-            continue
-        a, b = v.get("score"), variants[best].get("score")
-        if a is None:
-            continue
-        if b is None or (a > b if metric == "accuracy" else a < b):
-            best = name
-    assert best is not None
-    return best
+    """Name of the better-scoring variant; a tie on score goes to the faster one."""
+
+    def key(name: str) -> tuple[float, float]:
+        score = variants[name].get("score")
+        if score is None:
+            return (math.inf, math.inf)
+        rank = -score if metric == "accuracy" else score
+        return (rank, variants[name].get("seconds") or math.inf)
+
+    return min(variants, key=key)
+
+
+def apply_choice(row: dict[str, Any], metric: str | None = None) -> dict[str, Any]:
+    """Re-derive a plain row's top-level fields from its stored variants (idempotent)."""
+    variants = row.get("variants")
+    if not variants:
+        return row
+    chosen = better_variant(metric or TASKS[row["task"]].metric, variants)
+    row.update(variants[chosen])
+    row["chosen"] = chosen
+    row["seconds_both"] = round(sum(v["seconds"] for v in variants.values()), 2)
+    return row
 
 
 def run_plain(
@@ -370,18 +379,8 @@ def run_plain(
             client, messages, spec, inst.truth, enable_thinking=False, max_tokens=max_tokens
         ),
     }
-    chosen = better_variant(spec.metric, variants)
-    row.update(variants[chosen])
-    row.update(
-        turns=1,
-        subcalls=0,
-        trajectory=None,
-        plain_max_tokens=max_tokens,
-        chosen=chosen,
-        seconds_both=round(sum(v["seconds"] for v in variants.values()), 2),
-        variants=variants,
-    )
-    return row
+    row.update(turns=1, subcalls=0, trajectory=None, plain_max_tokens=max_tokens, variants=variants)
+    return apply_choice(row, spec.metric)
 
 
 def run_row(
@@ -454,7 +453,8 @@ def row_key(row: dict[str, Any]) -> tuple[str, int, str, int]:
 
 def load_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     data = json.loads(path.read_text(encoding="utf-8"))
-    return data.get("meta", {}), list(data.get("rows", []))
+    rows = [apply_choice(row) for row in data.get("rows", [])]
+    return data.get("meta", {}), rows
 
 
 def write_rows(path: Path, meta: dict[str, Any], rows: list[dict[str, Any]]) -> None:
