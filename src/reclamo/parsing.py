@@ -106,8 +106,15 @@ def _balanced_span(text: str, open_idx: int) -> int | None:
     """Return the index of the ``)`` matching the ``(`` at ``open_idx``.
 
     Parentheses inside single or double quotes are not counted, so
-    ``FINAL("f(x)")`` extracts cleanly. Returns None when unbalanced.
+    ``FINAL("f(x)")`` extracts cleanly. Prose apostrophes (``It's``) open a
+    "quote" that never closes, so if the quote-aware scan finds no match we
+    retry counting parentheses only. Returns None when still unbalanced.
     """
+    close = _scan_parens(text, open_idx, quotes=True)
+    return close if close is not None else _scan_parens(text, open_idx, quotes=False)
+
+
+def _scan_parens(text: str, open_idx: int, quotes: bool) -> int | None:
     depth = 0
     quote: str | None = None
     i = open_idx
@@ -119,7 +126,7 @@ def _balanced_span(text: str, open_idx: int) -> int | None:
                 continue
             if ch == quote:
                 quote = None
-        elif ch in _QUOTES:
+        elif quotes and ch in _QUOTES:
             quote = ch
         elif ch == "(":
             depth += 1

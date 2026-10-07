@@ -77,6 +77,12 @@ def test_final_parens_inside_quotes() -> None:
     assert cand.value == '"mismatched ) inside quotes"'
 
 
+def test_final_with_apostrophe() -> None:
+    cand = find_final("FINAL(It's 42, and the user's id is (7).)")
+    assert cand is not None
+    assert cand.value == "It's 42, and the user's id is (7)."
+
+
 def test_final_multiline_value() -> None:
     cand = find_final("FINAL(\n  line one\n  line two\n)")
     assert cand is not None
