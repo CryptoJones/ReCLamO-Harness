@@ -5,11 +5,19 @@ variant (arXiv 2512.24601, App. C.1), written here in our own words. One
 figure, ``subcall_chars``, governs every size hint so the prompt never
 contradicts itself. The ``rlm_query`` section only appears when recursion is
 allowed (``max_depth > 1``), because Qwen does worse at depth two and beyond.
+
+``protocol="tools"`` (issue #20) swaps fenced code and ``FINAL`` text for two
+OpenAI-style functions, ``execute_python`` and ``final_answer``
+(``tool_specs``). Its system prompt keeps the same data, batching and
+decomposition guidance; only the "how to act" parts differ. The fence prompt is
+unchanged.
 """
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from typing import Any
 
 _MAX_CHUNKS_SHOWN = 10
 
@@ -184,13 +192,14 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
     return "\n\n".join(parts) + "\n"
 
 
-def turn_prompt(i: int, n: int, first: bool = False) -> str:
+def turn_prompt(i: int, n: int, first: bool = False, protocol: str = "fence") -> str:
     """The short user message that opens each turn (stored, so the prefix is reused)."""
     line = f"Turn {i}/{n}."
     if first:
+        how = "one execute_python call" if protocol == "tools" else "one code block"
         line += (
-            " Start by inspecting `context` (type, length, a short slice) in one code "
-            "block. Do not answer yet."
+            f" Start by inspecting `context` (type, length, a short slice) in {how}. "
+            "Do not answer yet."
         )
     return line
 
@@ -204,33 +213,201 @@ def decompose_nudge() -> str:
     )
 
 
-def reverify_nudge(var: str) -> str:
+def reverify_nudge(var: str, protocol: str = "fence") -> str:
+    how = (
+        f'Call `final_answer(variable="{var}")`'
+        if protocol == "tools"
+        else f"Reply with `FINAL_VAR({var})`"
+    )
     return (
         f"You already computed the answer; it is in `{var}` and the last two turns "
-        f"repeated the same check. Stop verifying. Reply with `FINAL_VAR({var})`."
+        f"repeated the same check. Stop verifying. {how}."
     )
 
 
-def final_rejection(reason: str) -> str:
+def final_rejection(reason: str, protocol: str = "fence") -> str:
+    if protocol == "tools":
+        return (
+            f"final_answer was not accepted: {reason} Continue working, and call "
+            "final_answer only when the answer itself is ready, in a turn with no "
+            "execute_python call."
+        )
     return (
         f"That FINAL was not accepted: {reason} Continue working, and send FINAL or "
         "FINAL_VAR only when the answer itself is ready, in a message with no code."
     )
 
 
-def forced_final_prompt(why: str = "turns") -> str:
+def forced_final_prompt(why: str = "turns", protocol: str = "fence") -> str:
     """``why`` is "turns" or "time"."""
+    if protocol == "tools":
+        return (
+            f"You are out of {why}. Call final_answer now with your best answer, or with "
+            "`variable` set to the name of a variable that already holds it. No "
+            "execute_python."
+        )
     return (
         f"You are out of {why}. Reply now with your best answer as `FINAL(<answer>)`, "
         "or `FINAL_VAR(<name>)` if a variable already holds it. No code."
     )
 
 
+def no_action_prompt(protocol: str = "fence") -> str:
+    if protocol == "tools":
+        return (
+            "That message called no tool. Call execute_python to run code, or "
+            "final_answer when the answer is ready. Text outside a tool call is not "
+            "run and is not taken as the answer."
+        )
+    return (
+        "That message had no code and no final answer. Reply with exactly one ```repl code "
+        "block, or FINAL(...) / FINAL_VAR(...) when the answer is ready."
+    )
+
+
+def fence_slip_note() -> str:
+    """Tools protocol: the model wrote a fenced block instead of calling execute_python."""
+    return (
+        "[note] Your message had a fenced code block instead of an execute_python call. "
+        "It was run this once; its output is above. Use the execute_python tool from now on."
+    )
+
+
+# --- tools protocol (issue #20) ----------------------------------------------
+
+
+def tool_specs(output_truncate_chars: int = 2_000) -> list[dict[str, Any]]:
+    """The two functions offered to the root model, in OpenAI ``tools`` format."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_python",
+                "description": (
+                    "Run Python code in the persistent REPL that holds `context`, "
+                    "`llm_query`, `llm_query_batched` and every variable you created. "
+                    "Returns what the code printed (stdout, stderr, then any error), cut "
+                    f"to about {output_truncate_chars:,} characters. Print short summaries "
+                    "and keep results in variables."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "Python source to run."}
+                    },
+                    "required": ["code"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "final_answer",
+                "description": (
+                    "Finish with the answer. Give exactly one of `answer` (the answer "
+                    "text itself) or `variable` (the name of a REPL variable that already "
+                    "holds the answer). Do not call it in the same turn as execute_python."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "answer": {"type": "string", "description": "The final answer text."},
+                        "variable": {
+                            "type": "string",
+                            "description": "Name of a REPL variable holding the answer.",
+                        },
+                    },
+                },
+            },
+        },
+    ]
+
+
+_FENCED = re.compile(r"```repl\n(.*?)```", re.DOTALL)
+
+
+def _as_tool_examples(text: str) -> str:
+    """Rewrite ```repl examples as indented execute_python code, so the tools prompt
+    shows no fences to imitate."""
+
+    def sub(m: re.Match[str]) -> str:
+        lines = m.group(1).rstrip("\n").split("\n")
+        body = "\n".join(f"    {line}" if line else "" for line in lines)
+        return f"execute_python with code:\n\n{body}"
+
+    return _FENCED.sub(sub, text)
+
+
+def _tools_protocol_section(subcall_chars: int, recursive: bool) -> str:
+    section = _tools_section(subcall_chars, recursive)
+    return section.replace(
+        "to finish, as an alternative to FINAL / FINAL_VAR below.",
+        "to finish, as an alternative to calling final_answer.",
+    ).replace("## Tools inside the REPL", "## Names inside the REPL")
+
+
+def _tools_rules_section() -> str:
+    return (
+        "## Rules\n"
+        "\n"
+        "1. Look before you compute. On your first turn, inspect `context` (type, "
+        "length, a short slice) so your plan matches the data.\n"
+        "2. Keep results in variables. Print only short summaries: counts, a few "
+        "lines, the first few hundred characters. Long output is truncated and "
+        "wastes your window.\n"
+        "3. Act only through tool calls. Make one execute_python call per turn and wait "
+        "for its output before deciding the next step. Never write code in the message "
+        "text; it is not run.\n"
+        "4. Finish only when the answer exists: call final_answer with `answer` set to "
+        "the answer text, or with `variable` set to the name of a variable you already "
+        "created that holds it. Never both, and never in the same turn as execute_python. "
+        'Or set `answer["content"]` and `answer["ready"] = True` in code.\n'
+        "5. final_answer must contain the answer, not a plan, not a description of what "
+        "you will do, and not a repeat of an earlier check. If the answer is already in "
+        "a variable, pass that variable's name."
+    )
+
+
+def build_tools_system_prompt(settings: PromptSettings | object, context_meta: ContextMeta) -> str:
+    """The system prompt for ``protocol="tools"``: same guidance, tools instead of fences."""
+    subcall_chars = int(getattr(settings, "subcall_chars", 12_000))
+    max_depth = int(getattr(settings, "max_depth", 1))
+    concurrency = int(getattr(settings, "concurrency", 1))
+    recursive = max_depth > 1
+
+    intro = (
+        "You answer a question about data that is far too large to read at once. The "
+        "data lives in a Python REPL as the variable `context`; you never see it "
+        "directly. You have two tools. `execute_python(code)` runs code in that REPL and "
+        "returns its printed output. `final_answer(answer=... | variable=...)` ends the "
+        "task. You work in turns: each turn you call execute_python once, read the "
+        "output, and decide the next step. Variables persist between turns. Inside the "
+        "REPL you can ask a separate language model to read a piece of the data for you.\n"
+        "\n"
+        "Your own context window is small. Treat it as a scratchpad for decisions, and "
+        "keep the data and the intermediate results in REPL variables."
+    )
+    parts = [
+        intro,
+        "## The data",
+        context_meta.render(),
+        _tools_protocol_section(subcall_chars, recursive),
+        _batching_section(subcall_chars, concurrency),
+        _as_tool_examples(_examples_section(subcall_chars, recursive)),
+        _tools_rules_section(),
+    ]
+    return "\n\n".join(parts) + "\n"
+
+
 __all__ = [
     "ContextMeta",
     "PromptSettings",
     "build_system_prompt",
+    "build_tools_system_prompt",
     "decompose_nudge",
+    "fence_slip_note",
+    "no_action_prompt",
+    "tool_specs",
     "final_rejection",
     "forced_final_prompt",
     "reverify_nudge",

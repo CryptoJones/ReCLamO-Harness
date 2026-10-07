@@ -558,3 +558,33 @@ def test_load_rows_reapplies_the_choice_rule(tmp_path: Path) -> None:
     _meta, rows = bench.load_rows(out)
     assert rows[0]["chosen"] == "nothink" and rows[0]["seconds"] == 9.0
     assert rows[0]["seconds_both"] == 159.0 and "variants" not in rows[1]
+
+
+# --- protocol (issue #20) -------------------------------------------------------------
+
+
+def test_rlm_row_records_protocol_and_stats(tmp_path: Path) -> None:
+    import dataclasses
+
+    from tests.mocklm import call, tool_turn
+
+    cfg = dataclasses.replace(make_config("http://x"), protocol="tools")
+    inst = bench.build_instance("needle", 30, 1)
+    lm = MockLM(root=["no tool", tool_turn(call("final_answer", answer=inst.truth))])
+    row = bench.run_row(cfg, lm, "needle", 30, "rlm", 1, str(tmp_path))
+    assert row["protocol"] == "tools" and row["correct"] is True
+    assert row["stats"]["slips"] == {"text_no_tool": 1}
+    assert bench.row_key(row) == ("needle", 30, "rlm:tools", 1)
+
+
+def test_protocols_are_separate_cells_for_resume_and_summary() -> None:
+    fence = _stub_runner([])("needle", 10, "rlm", 0) | {"protocol": "fence"}
+    calls: list[tuple[str, int, str, int]] = []
+    rows = [fence]
+    bench.run_grid(_stub_runner(calls), [("needle", 10)], ["rlm"], [0], rows=rows)
+    assert calls == []  # the fence row is present; a fence pass has nothing to do
+    bench.run_grid(_stub_runner(calls), [("needle", 10)], ["rlm"], [0], rows=rows, protocol="tools")
+    assert calls == [("needle", 10, "rlm", 0)]
+    rows[-1]["protocol"] = "tools"
+    assert [c.mode for c in bench.summarize(rows)] == ["rlm", "rlm:tools"]
+    assert "rlm:tools" in bench.format_summary(bench.summarize(rows))

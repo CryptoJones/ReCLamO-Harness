@@ -10,13 +10,16 @@ What it adds over a raw ``chat.completions.create``:
 - a semaphore that serialises calls (pluto serves one request at a time);
 - bounded retries with exponential backoff on 429, 5xx, timeouts and
   connection errors;
-- tolerant usage accounting (a missing ``usage`` field is not an error).
+- tolerant usage accounting (a missing ``usage`` field is not an error);
+- optional OpenAI-style function calling: ``tools=`` goes out with
+  ``tool_choice="auto"`` and ``message.tool_calls`` comes back as ``ToolCall``s.
 
 The API key is held privately and never appears in ``repr``, logs or errors.
 """
 
 from __future__ import annotations
 
+import json
 import re
 import threading
 import time
@@ -54,6 +57,23 @@ class Usage:
 
 
 @dataclass
+class ToolCall:
+    """One structured function call from the model. ``arguments`` is the raw JSON text."""
+
+    id: str
+    name: str
+    arguments: str
+
+    def as_message(self) -> dict[str, Any]:
+        """The OpenAI wire shape, for the assistant message's ``tool_calls`` list."""
+        return {
+            "id": self.id,
+            "type": "function",
+            "function": {"name": self.name, "arguments": self.arguments},
+        }
+
+
+@dataclass
 class Completion:
     content: str
     reasoning: str | None
@@ -64,6 +84,7 @@ class Completion:
     role: str = "root"
     content_from_reasoning: bool = False
     attempts: int = 1
+    tool_calls: list[ToolCall] | None = None
 
 
 def split_think(text: str) -> tuple[str, str | None]:
@@ -134,6 +155,7 @@ class LMClient:
         *,
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Return the kwargs for ``chat.completions.create`` (exposed for tests)."""
         mc: ModelConfig = self.cfg.role(role)
@@ -157,6 +179,9 @@ class LMClient:
             template_kwargs["reasoning_effort"] = mc.reasoning_effort
         extra_body["chat_template_kwargs"] = template_kwargs
         kwargs["extra_body"] = extra_body
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
         return kwargs
 
     def complete(
@@ -166,9 +191,10 @@ class LMClient:
         *,
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> Completion:
         kwargs = self.build_request(
-            messages, role, enable_thinking=enable_thinking, max_tokens=max_tokens
+            messages, role, enable_thinking=enable_thinking, max_tokens=max_tokens, tools=tools
         )
         started = time.monotonic()
         with self._sem:
@@ -217,8 +243,11 @@ class LMClient:
             reasoning = inline_reasoning
         reasoning = (reasoning or "").strip() or None
 
+        tool_calls = _parse_tool_calls(getattr(message, "tool_calls", None))
+
         from_reasoning = False
-        if not content and reasoning:
+        # An empty content is normal next to tool calls; only fall back without them.
+        if not content and reasoning and not tool_calls:
             content, from_reasoning = reasoning, True
 
         usage = None
@@ -240,7 +269,25 @@ class LMClient:
             role=role,
             content_from_reasoning=from_reasoning,
             attempts=attempts,
+            tool_calls=tool_calls,
         )
+
+
+def _parse_tool_calls(raw: Any) -> list[ToolCall] | None:
+    """``message.tool_calls`` -> ``ToolCall``s; a missing id gets a stable stand-in."""
+    if not raw:
+        return None
+    calls: list[ToolCall] = []
+    for k, tc in enumerate(raw):
+        fn = getattr(tc, "function", None)
+        name = getattr(fn, "name", None) or ""
+        arguments = getattr(fn, "arguments", None)
+        if not isinstance(arguments, str):  # some servers send an object
+            arguments = json.dumps(arguments if arguments is not None else {})
+        calls.append(
+            ToolCall(id=getattr(tc, "id", None) or f"call_{k}", name=name, arguments=arguments)
+        )
+    return calls or None
 
 
 def _retryable(exc: openai.APIError) -> bool:
@@ -251,4 +298,4 @@ def _retryable(exc: openai.APIError) -> bool:
     return False
 
 
-__all__ = ["Completion", "LMClient", "Usage", "split_think"]
+__all__ = ["Completion", "LMClient", "ToolCall", "Usage", "split_think"]

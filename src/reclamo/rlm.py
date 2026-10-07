@@ -22,11 +22,23 @@ with a corrective message, when it sits next to unexecuted code, names a
 missing variable, or reads like a plan the first time it is seen). When turns
 run out the loop prefers an answer that already exists in the REPL over asking
 the model again (paper failure E.2).
+
+``protocol="tools"`` (issue #20) runs the same loop over OpenAI-style function
+calls: ``execute_python(code)`` replaces the fenced block and
+``final_answer(answer | variable)`` replaces ``FINAL`` / ``FINAL_VAR``. Each
+turn appends the assistant message with its ``tool_calls``, then one
+``role: "tool"`` message per call (in call order, matching ``tool_call_id``),
+then a user message with any notes and the next ``Turn i/N`` line, so the
+history stays append-only and valid for the chat template. A text reply with
+no tool call gets a nudge; a fenced block or a ``FINAL(...)`` in the text is
+honoured once as a courtesy and counted as a protocol slip. Every guard that
+applies to the fence protocol applies here too.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import functools
 import hashlib
 import json
 import re
@@ -35,18 +47,22 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-from reclamo.client import Completion, Usage
+from reclamo.client import Completion, ToolCall, Usage
 from reclamo.config import RLMConfig
 from reclamo.errors import RLMErrorLimit, RLMTimeout, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger, VerbosePrinter
-from reclamo.parsing import FinalCandidate, find_code_blocks, find_final
+from reclamo.parsing import FinalCandidate, find_code_blocks, find_final, looks_like_plan
 from reclamo.prompts import (
     ContextMeta,
     build_system_prompt,
+    build_tools_system_prompt,
     decompose_nudge,
+    fence_slip_note,
     final_rejection,
     forced_final_prompt,
+    no_action_prompt,
     reverify_nudge,
+    tool_specs,
     turn_prompt,
 )
 from reclamo.repl import make_repl
@@ -71,10 +87,8 @@ ANSWER_VAR_NAMES = ("final_answer", "answer_text", "result", "final")
 CHARS_PER_TOKEN = 3.5
 KEEP_RECENT_TURNS = 4
 SUMMARY_CHARS = 1_500
-NO_ACTION_PROMPT = (
-    "That message had no code and no final answer. Reply with exactly one ```repl code "
-    "block, or FINAL(...) / FINAL_VAR(...) when the answer is ready."
-)
+NO_ACTION_PROMPT = no_action_prompt("fence")
+TOOL_NAMES = ("execute_python", "final_answer")
 RLM_QUERY_PROMPT = (
     "The context holds a task handed down by a parent process: instructions and the "
     "data they apply to. Carry out the task and finish with the result."
@@ -96,6 +110,9 @@ class RLMResult:
     trajectory_path: str | None
     depth: int = 0
     child_turns: int = 0  # root turns taken by nested RLMs (depth >= 1), whole run
+    protocol: str = "fence"
+    # executions, syntax_errors, exec_errors, final_rejections, slips: {kind: count}
+    stats: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -139,6 +156,56 @@ def _strip_quotes(value: str) -> str:
     return value
 
 
+def _new_stats() -> dict[str, Any]:
+    return {
+        "executions": 0,
+        "syntax_errors": 0,
+        "exec_errors": 0,
+        "final_rejections": 0,
+        "slips": {},
+    }
+
+
+def _parse_tool_args(call: ToolCall) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (arguments, error). An empty argument string counts as ``{}``."""
+    raw = (call.arguments or "").strip() or "{}"
+    try:
+        args = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, (
+            f"the arguments to {call.name} were not valid JSON ({exc.msg} at position "
+            f"{exc.pos}). Send one JSON object."
+        )
+    if not isinstance(args, dict):
+        return None, f"the arguments to {call.name} must be a JSON object."
+    return args, None
+
+
+def _final_from_args(
+    args: dict[str, Any], has_code: bool
+) -> tuple[FinalCandidate | None, str | None]:
+    """``final_answer`` arguments -> a candidate, or an error. Exactly one of the two."""
+    answer, variable = args.get("answer"), args.get("variable")
+    if isinstance(answer, str) and not answer.strip():
+        answer = None
+    if isinstance(variable, str) and not variable.strip():
+        variable = None
+    if answer is not None and variable is not None:
+        return None, "final_answer takes exactly one of `answer` or `variable`, not both."
+    if answer is None and variable is None:
+        return None, (
+            "final_answer needs `answer` (the answer text) or `variable` (the name of a "
+            "variable holding it)."
+        )
+    if variable is not None:
+        if not isinstance(variable, str):
+            return None, "`variable` must be a string: the name of a REPL variable."
+        return FinalCandidate("FINAL_VAR", variable.strip(), has_code, False), None
+    text = answer if isinstance(answer, str) else json.dumps(answer, ensure_ascii=False)
+    text = text.strip()
+    return FinalCandidate("FINAL", text, has_code, looks_like_plan(text)), None
+
+
 def _default_repl_factory(cfg: RLMConfig, handler: LLMHandler) -> REPL:
     return make_repl(cfg, handler)  # honours cfg.sandbox
 
@@ -164,7 +231,8 @@ class RLM:
         self._budget = budget
         self._context_chars = 0
         self._turn_max_prompt = 0
-        self._full_history: list[dict[str, str]] = []
+        self._full_history: list[dict[str, Any]] = []
+        self._stats = _new_stats()
 
     # --- public -----------------------------------------------------------
 
@@ -196,6 +264,8 @@ class RLM:
     # --- the loop ---------------------------------------------------------
 
     def _run(self, repl: REPL, query: str, meta: ContextMeta, started: float) -> RLMResult:
+        if self.cfg.protocol == "tools":
+            return self._run_tools(repl, query, meta, started)
         cfg = self.cfg
         n = cfg.max_iterations
         history: list[dict[str, str]] = [
@@ -242,7 +312,7 @@ class RLM:
             results: list[ExecResult] = []
             for k, block in enumerate(blocks, 1):
                 self.printer.code(k, block)
-                res = repl.execute(block)
+                res = self._exec(repl, block)
                 results.append(res)
                 self.printer.output(k, res.output)
                 if res.answer is not None:
@@ -286,6 +356,7 @@ class RLM:
                     )
                     return self._finish(value or "", stop, i, started)
                 notes.append(final_rejection(reason or "it was not usable."))
+                self._stats["final_rejections"] += 1
                 if cand.looks_like_plan:
                     rejected_plan = cand.value
 
@@ -314,6 +385,7 @@ class RLM:
                 notes.append(decompose_nudge())
             if not blocks and cand is None:
                 notes.append(NO_ACTION_PROMPT)
+                self._slip("no_action")
             for note in notes:
                 self.printer.note(note)
 
@@ -325,25 +397,268 @@ class RLM:
 
         return self._forced_finish(history, repl, answer_state, iterations, started)
 
+    def _run_tools(self, repl: REPL, query: str, meta: ContextMeta, started: float) -> RLMResult:
+        """The loop for ``protocol="tools"``: execute_python / final_answer function calls."""
+        cfg = self.cfg
+        n = cfg.max_iterations
+        tools = tool_specs(cfg.output_truncate_chars)
+        first = turn_prompt(1, n, first=True, protocol="tools")
+        history: list[dict[str, Any]] = [
+            {"role": "system", "content": build_tools_system_prompt(cfg, meta)},
+            {"role": "user", "content": f"{query}\n\n{first}"},
+        ]
+        kinds = ["system", "query"]
+        self._full_history = list(history)
+
+        prev_code_hash: str | None = None
+        prev_vars: set[str] = set()
+        rejected_plan: str | None = None
+        consecutive_errors = 0
+        answer_state: dict[str, Any] | None = None
+        iterations = 0
+
+        for i in range(1, n + 1):
+            iterations = i
+            try:
+                self._check_limits(repl, answer_state)
+            except RLMTimeout:
+                if self.depth > 0:
+                    raise
+                self.logger.event("timeout", depth=self.depth, turn=i)
+                return self._forced_finish(history, repl, answer_state, i - 1, started, why="time")
+            if self.depth > 0:
+                assert self._budget is not None
+                self._budget.child_turns += 1
+            self._maybe_compact(history, kinds, repl, i)
+            self._turn_max_prompt = 0
+            messages_in = len(history)
+
+            completion, notes = self._root_call(history, tools)
+            content = completion.content
+            calls = completion.tool_calls or []
+            assistant: dict[str, Any] = {"role": "assistant", "content": content}
+            if calls:
+                assistant["tool_calls"] = [c.as_message() for c in calls]
+            if self.logger.sft_path:
+                self.logger.sft(
+                    list(history),
+                    content,
+                    depth=self.depth,
+                    turn=i,
+                    tool_calls=assistant.get("tool_calls"),
+                )
+            self._append(history, kinds, assistant, "assistant")
+            self.printer.response(self.depth, i, n, content)
+
+            slips: list[str] = []
+            outputs: dict[int, str] = {}
+            finals: dict[int, dict[str, Any]] = {}
+            codes: list[str] = []
+            results: list[ExecResult] = []
+            for k, call in enumerate(calls):
+                if call.name not in TOOL_NAMES:
+                    outputs[k] = (
+                        f"Error: there is no tool named `{call.name}`. The tools are "
+                        "execute_python and final_answer."
+                    )
+                    slips.append("unknown_tool")
+                    continue
+                args, err = _parse_tool_args(call)
+                if args is None:
+                    outputs[k] = f"Error: {err}"
+                    slips.append("malformed_args")
+                    continue
+                if call.name == "final_answer":
+                    finals[k] = args  # judged after every execute_python in the turn ran
+                    continue
+                code = args.get("code")
+                if not isinstance(code, str) or not code.strip():
+                    outputs[k] = "Error: execute_python needs a non-empty string argument `code`."
+                    slips.append("malformed_args")
+                    continue
+                self.printer.code(len(codes) + 1, code)
+                res = self._exec(repl, code)
+                self.printer.output(len(codes) + 1, res.output)
+                codes.append(code)
+                results.append(res)
+                outputs[k] = res.output or "(no output)"
+                if res.answer is not None:
+                    answer_state = res.answer
+
+            # Courtesy: a fenced block in a reply with no tool call still runs, once a turn.
+            fenced = find_code_blocks(content) if not calls else []
+            fenced_results: list[ExecResult] = []
+            if fenced:
+                slips.append("fenced_code")
+                for block in fenced:
+                    self.printer.code(len(codes) + 1, block)
+                    res = self._exec(repl, block)
+                    self.printer.output(len(codes) + 1, res.output)
+                    codes.append(block)
+                    results.append(res)
+                    fenced_results.append(res)
+                    if res.answer is not None:
+                        answer_state = res.answer
+
+            # Bound now; the lists are filled in place before each call.
+            log = functools.partial(
+                self._log_tool_turn, i, messages_in, completion, codes, results, notes,
+                calls, outputs, slips,
+            )  # fmt: skip
+
+            for kind in slips:
+                self._slip(kind)
+
+            for res in results:
+                if res.answer_ready:
+                    log({"kind": "answer_dict", "accepted": True})
+                    return self._finish(
+                        (res.answer or {}).get("content") or "", "answer_dict", i, started
+                    )
+
+            if codes:
+                consecutive_errors = consecutive_errors + 1 if any(r.error for r in results) else 0
+                if consecutive_errors >= cfg.max_errors:
+                    log(None)
+                    raise RLMErrorLimit(
+                        f"{consecutive_errors} consecutive REPL errors "
+                        f"(max_errors={cfg.max_errors})",
+                        partial_answer=self._partial(repl, answer_state),
+                    )
+
+            decision: dict[str, Any] | None = None
+            for k, args in finals.items():
+                cand, err = _final_from_args(args, has_code=bool(codes))
+                if cand is None:
+                    outputs[k] = f"Error: {err}"
+                    slips.append("malformed_args")
+                    self._slip("malformed_args")
+                    continue
+                accepted, value, reason, stop = self._judge_final(
+                    cand, repl, rejected_plan, answer_state
+                )
+                decision = {
+                    "kind": cand.kind,
+                    "value": cand.value,
+                    "accepted": accepted,
+                    "reason": reason,
+                    "via": "tool",
+                }
+                if accepted:
+                    log(decision)
+                    return self._finish(value or "", stop, i, started)
+                outputs[k] = final_rejection(reason or "it was not usable.", "tools")
+                self._stats["final_rejections"] += 1
+                if cand.looks_like_plan:
+                    rejected_plan = cand.value
+
+            if not calls:
+                cand = find_final(content)
+                if cand is not None:  # FINAL(...) written as text: judged as a courtesy
+                    slips.append("final_in_text")
+                    self._slip("final_in_text")
+                    accepted, value, reason, stop = self._judge_final(
+                        cand, repl, rejected_plan, answer_state
+                    )
+                    decision = {
+                        "kind": cand.kind,
+                        "value": cand.value,
+                        "accepted": accepted,
+                        "reason": reason,
+                        "via": "text",
+                    }
+                    if accepted:
+                        log(decision)
+                        return self._finish(value or "", stop, i, started)
+                    notes.append(final_rejection(reason or "it was not usable.", "tools"))
+                    self._stats["final_rejections"] += 1
+                    if cand.looks_like_plan:
+                        rejected_plan = cand.value
+                elif not fenced:
+                    slips.append("text_no_tool")
+                    self._slip("text_no_tool")
+                    notes.append(no_action_prompt("tools"))
+
+            # One tool message per call, in call order, each answering its tool_call_id.
+            for k, call in enumerate(calls):
+                msg = {"role": "tool", "tool_call_id": call.id, "content": outputs[k]}
+                self._append(history, kinds, msg, "repl")
+
+            if codes:
+                code_hash = hashlib.sha256(
+                    "\n".join(c.strip() for c in codes).encode("utf-8")
+                ).hexdigest()
+                if code_hash == prev_code_hash:
+                    current = results[-1].vars if results else []
+                    new_vars = [v for v in current if v not in prev_vars]
+                    var = new_vars[-1] if new_vars else (current[-1] if current else None)
+                    if var:
+                        notes.append(reverify_nudge(var, "tools"))
+                prev_code_hash = code_hash
+                prev_vars = set(results[-1].vars) if results else prev_vars
+            if (
+                self._context_chars > cfg.subcall_chars
+                and self._turn_max_prompt >= 0.9 * self._context_chars
+            ):
+                notes.append(decompose_nudge())
+            for note in notes:
+                self.printer.note(note)
+
+            parts: list[str] = []
+            for k, res in enumerate(fenced_results, 1):
+                header = f"[block {k} output]" if len(fenced_results) > 1 else "[output]"
+                parts.append(f"{header}\n{res.output or '(no output)'}")
+            if fenced_results:
+                parts.append(fence_slip_note())
+            parts.extend(notes)
+            if i < n:
+                parts.append(turn_prompt(i + 1, n, protocol="tools"))
+            if parts:
+                kind = "repl" if fenced_results else "note"
+                self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, kind)
+            log(decision)
+
+        return self._forced_finish(history, repl, answer_state, iterations, started)
+
     # --- pieces -----------------------------------------------------------
 
+    def _exec(self, repl: REPL, code: str) -> ExecResult:
+        res = repl.execute(code)
+        self._stats["executions"] += 1
+        if res.error:
+            key = "syntax_errors" if res.error.startswith("SyntaxError") else "exec_errors"
+            self._stats[key] += 1
+        return res
+
+    def _slip(self, kind: str) -> None:
+        slips = self._stats["slips"]
+        slips[kind] = slips.get(kind, 0) + 1
+
     def _append(
-        self, history: list[dict[str, str]], kinds: list[str], msg: dict[str, str], kind: str
+        self, history: list[dict[str, Any]], kinds: list[str], msg: dict[str, Any], kind: str
     ) -> None:
         history.append(msg)
         kinds.append(kind)
         self._full_history.append(msg)
 
-    def _root_call(self, history: list[dict[str, str]]) -> tuple[Completion, list[str]]:
+    def _root_call(
+        self, history: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
+    ) -> tuple[Completion, list[str]]:
         notes: list[str] = []
-        completion = self.client.complete(history, "root")
+        # ``tools`` only travels when set, so fence-protocol clients need not accept it.
+        extra: dict[str, Any] = {"tools": tools} if tools else {}
+        completion = self.client.complete(history, "root", **extra)
         self._budget_add(completion)
-        if completion.finish_reason == "length" and not completion.content.strip():
+        if (
+            completion.finish_reason == "length"
+            and not completion.content.strip()
+            and not completion.tool_calls
+        ):
             notes.append(
                 "[note] the previous attempt spent its whole output budget thinking; "
                 "it was retried without thinking."
             )
-            completion = self.client.complete(history, "root", enable_thinking=False)
+            completion = self.client.complete(history, "root", enable_thinking=False, **extra)
             self._budget_add(completion)
             completion.attempts += 1
         return completion, notes
@@ -470,7 +785,7 @@ class RLM:
 
     def _forced_finish(
         self,
-        history: list[dict[str, str]],
+        history: list[dict[str, Any]],
         repl: REPL,
         answer_state: dict[str, Any] | None,
         iterations: int,
@@ -484,15 +799,25 @@ class RLM:
             self.logger.event("forced_finish", method="existing_value", depth=self.depth)
             return self._finish(existing, stop, iterations, started)
 
-        prompt = forced_final_prompt(why)
+        tools_mode = self.cfg.protocol == "tools"
+        prompt = forced_final_prompt(why, self.cfg.protocol)
         if history and history[-1]["role"] == "user":
             history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
         else:
             self._append(history, kinds=[], msg={"role": "user", "content": prompt}, kind="repl")
-        completion, _notes = self._root_call(history)
+        tools = tool_specs(self.cfg.output_truncate_chars) if tools_mode else None
+        completion, _notes = self._root_call(history, tools)
         content = completion.content
         answer = content.strip()
         cand = find_final(content)
+        for call in completion.tool_calls or []:
+            if call.name != "final_answer":
+                continue
+            args, _err = _parse_tool_args(call)
+            tool_cand = _final_from_args(args, has_code=False)[0] if args is not None else None
+            if tool_cand is not None:
+                cand = tool_cand
+                break
         if cand is not None:
             if cand.kind == "FINAL_VAR" or _IDENT.match(cand.value):
                 var = repl.get_var(_strip_quotes(cand.value.strip()))
@@ -505,6 +830,7 @@ class RLM:
             depth=self.depth,
             content=content,
             reasoning=completion.reasoning,
+            tool_calls=[dataclasses.asdict(c) for c in completion.tool_calls or []],
         )
         return self._finish(answer, stop, iterations, started)
 
@@ -520,6 +846,9 @@ class RLM:
             child_turns=self._budget.child_turns,
             usage=dataclasses.asdict(self._budget.usage),
             elapsed=round(elapsed, 3),
+            protocol=self.cfg.protocol,
+            stats=self._stats,
+            protocol_slips=sum(self._stats["slips"].values()),
         )
         self.printer.final(answer, reason)
         return RLMResult(
@@ -532,6 +861,8 @@ class RLM:
             trajectory_path=str(self.logger.path) if self.logger.path else None,
             depth=self.depth,
             child_turns=self._budget.child_turns,
+            protocol=self.cfg.protocol,
+            stats=json.loads(json.dumps(self._stats)),
         )
 
     def _log_iteration(
@@ -543,6 +874,7 @@ class RLM:
         results: list[ExecResult],
         notes: list[str],
         decision: dict[str, Any] | None,
+        **extra: Any,
     ) -> None:
         self.logger.iteration(
             depth=self.depth,
@@ -558,18 +890,43 @@ class RLM:
             final=decision,
             usage=dataclasses.asdict(completion.usage) if completion.usage else None,
             latency=round(completion.latency, 3),
+            **extra,
         )
 
-    # --- compaction (epic #8 decision 8) ----------------------------------
+    def _log_tool_turn(
+        self,
+        i: int,
+        messages_in: int,
+        completion: Completion,
+        codes: list[str],
+        results: list[ExecResult],
+        notes: list[str],
+        calls: list[ToolCall],
+        outputs: dict[int, str],
+        slips: list[str],
+        decision: dict[str, Any] | None,
+    ) -> None:
+        self._log_iteration(
+            i, messages_in, completion, codes, results, notes, decision,
+            tool_calls=[dataclasses.asdict(c) for c in calls],
+            tool_outputs=[outputs.get(k, "") for k in range(len(calls))],
+            slips=slips,
+        )  # fmt: skip
+
+    # --- compaction (epic #8 decision 8)----------------------------------
 
     def _maybe_compact(
-        self, history: list[dict[str, str]], kinds: list[str], repl: REPL, turn: int
+        self, history: list[dict[str, Any]], kinds: list[str], repl: REPL, turn: int
     ) -> None:
         cfg = self.cfg
         limit = 0.85 * cfg.context_tokens
 
+        def size(m: dict[str, Any]) -> int:
+            calls = m.get("tool_calls")
+            return len(m["content"] or "") + (len(json.dumps(calls)) if calls else 0)
+
         def estimate() -> float:
-            return sum(len(m["content"]) for m in history) / CHARS_PER_TOKEN
+            return sum(size(m) for m in history) / CHARS_PER_TOKEN
 
         before = estimate()
         if before <= limit:
@@ -584,8 +941,9 @@ class RLM:
             turn_no = repl_positions.index(idx) + 1
             original = history[idx]["content"]
             elided.append((turn_no, original))
+            # A tool message keeps its role and tool_call_id so the history stays valid.
             history[idx] = {
-                "role": "user",
+                **history[idx],
                 "content": f"[REPL output from turn {turn_no} elided; {len(original)} chars]",
             }
             kinds[idx] = "repl_stub"
@@ -605,7 +963,7 @@ class RLM:
             self._budget_add(completion)
             first, last = elided[0][0], elided[-1][0]
             history[old[0]] = {
-                "role": "user",
+                **history[old[0]],
                 "content": (
                     f"[Summary of elided REPL output from turns {first}-{last}]\n"
                     f"{completion.content.strip()[:SUMMARY_CHARS]}"

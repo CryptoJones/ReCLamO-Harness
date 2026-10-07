@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import itertools
+import json
 from collections.abc import Callable
 from typing import Any
 
-from reclamo.client import Completion, Usage
+from reclamo.client import Completion, ToolCall, Usage
 
 SECRET_REASONING = "secret reasoning that must never reach the history"
 
@@ -20,6 +22,22 @@ def completion(content: str, *, role: str = "root", finish_reason: str = "stop")
         model="mock",
         role=role,
     )
+
+
+_ids = itertools.count(1)
+
+
+def call(name: str, arguments: str | None = None, /, **args: Any) -> ToolCall:
+    """One scripted tool call. Pass raw ``arguments`` text to script malformed JSON."""
+    raw = arguments if arguments is not None else json.dumps(args)
+    return ToolCall(id=f"call_{next(_ids)}", name=name, arguments=raw)
+
+
+def tool_turn(*calls: ToolCall, content: str = "", finish_reason: str = "tool_calls") -> Completion:
+    """A root turn that makes ``calls`` (and optionally says ``content``)."""
+    c = completion(content, finish_reason=finish_reason)
+    c.tool_calls = list(calls) or None
+    return c
 
 
 class MockLM:
@@ -41,9 +59,12 @@ class MockLM:
         *,
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> Completion:
         msgs = [dict(m) for m in messages]
-        self.calls.append({"role": role, "messages": msgs, "enable_thinking": enable_thinking})
+        self.calls.append(
+            {"role": role, "messages": msgs, "enable_thinking": enable_thinking, "tools": tools}
+        )
         if role == "root":
             if not self.root:
                 raise AssertionError("MockLM: root script exhausted")
@@ -67,4 +88,10 @@ class MockLM:
         return [c for c in self.calls if c["role"] == "sub"]
 
     def all_message_text(self) -> str:
-        return "\n".join(m["content"] for c in self.calls for m in c["messages"])
+        parts: list[str] = []
+        for c in self.calls:
+            for m in c["messages"]:
+                parts.append(m.get("content") or "")
+                if m.get("tool_calls"):
+                    parts.append(json.dumps(m["tool_calls"]))
+        return "\n".join(parts)

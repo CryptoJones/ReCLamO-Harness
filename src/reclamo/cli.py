@@ -61,6 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="where model-written code runs (default: the profile's sandbox, subprocess)",
     )
+    run.add_argument(
+        "--protocol",
+        choices=("fence", "tools"),
+        default=None,
+        help="how the root model acts: fenced code + FINAL text (fence, the default) or "
+        "execute_python / final_answer tool calls (tools)",
+    )
     run.set_defaults(func=cmd_run)
     return parser
 
@@ -167,6 +174,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides["root"] = dataclasses.replace(cfg.root, enable_thinking=False)
     if args.sandbox:
         overrides["sandbox"] = args.sandbox
+    if args.protocol:
+        overrides["protocol"] = args.protocol
     if overrides:
         cfg = dataclasses.replace(cfg, **overrides)
         client.cfg = cfg
