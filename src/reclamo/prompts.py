@@ -75,8 +75,8 @@ def _batching_section(subcall_chars: int) -> str:
         "once per line, once per record, or inside a tight loop. Batch instead: gather "
         f"about {subcall_chars:,} characters of text into one prompt and ask about the "
         "whole batch. For a context of 1000 lines, that means roughly 10 to 20 calls, "
-        "never 1000. There is a hard cap on calls per run; exceeding it ends the run "
-        "with no answer."
+        "never 1000. There is a hard cap on sub-calls per code block and per run; once "
+        "it is reached, further calls fail with an error."
     )
 
 

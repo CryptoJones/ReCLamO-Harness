@@ -1,3 +1,5 @@
+import pytest
+
 from reclamo.parsing import (
     FinalCandidate,
     find_code_blocks,
@@ -157,6 +159,41 @@ def test_final_var_never_flagged_as_plan() -> None:
 
 def test_final_word_in_prose_without_parens_ignored() -> None:
     assert find_final("The final step is to count. FINAL answer pending.") is None
+
+
+def test_mid_sentence_mention_is_not_a_candidate() -> None:
+    text = "Once I have the count I'll call FINAL(answer) to finish.\nLet me count first."
+    assert find_final(text) is None
+
+
+def test_mid_sentence_mention_does_not_shadow_real_final() -> None:
+    text = "Earlier I said I'd call FINAL(answer).\nFINAL(There are 17 customers.)"
+    cand = find_final(text)
+    assert cand is not None and cand.value == "There are 17 customers."
+
+
+@pytest.mark.parametrize(
+    ("text", "kind", "value"),
+    [
+        ("**FINAL(42)**", "FINAL", "42"),
+        ("`FINAL_VAR(result)`", "FINAL_VAR", "result"),
+        ("> FINAL(quoted)", "FINAL", "quoted"),
+        ("- FINAL_VAR(item)", "FINAL_VAR", "item"),
+        ("   FINAL(indented)", "FINAL", "indented"),
+        ("### FINAL(heading)", "FINAL", "heading"),
+        ("**`FINAL_VAR(both)`**", "FINAL_VAR", "both"),
+    ],
+)
+def test_markdown_wrapped_final_accepted(text: str, kind: str, value: str) -> None:
+    cand = find_final(text)
+    assert cand is not None
+    assert (cand.kind, cand.value) == (kind, value)
+
+
+def test_final_after_code_fence_is_at_line_start() -> None:
+    text = "Explanation.\n```repl\nx = 1\n```\nFINAL_VAR(x)"
+    cand = find_final(text)
+    assert cand is not None and cand.kind == "FINAL_VAR" and cand.has_code
 
 
 # --- looks_like_plan ---------------------------------------------------------

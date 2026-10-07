@@ -29,7 +29,14 @@ _FENCE = re.compile(
     r"^[ \t]*```[ \t]*$",
     re.DOTALL | re.MULTILINE,
 )
-_FINAL_HEAD = re.compile(r"\b(?P<kind>FINAL_VAR|FINAL)\s*\(")
+# A candidate must start its line. Qwen writes "...then I'll call FINAL(answer)"
+# mid-sentence while planning, and that is not an answer. Light markdown
+# wrappers before the keyword are allowed: bold/code marks, a blockquote or
+# list marker, or a heading hash.
+_FINAL_HEAD = re.compile(
+    r"^[ \t]*(?:(?:\*\*|__|`|>|[-*+]|#+|\d+[.)])[ \t]*)*(?P<kind>FINAL_VAR|FINAL)\s*\(",
+    re.MULTILINE,
+)
 _QUOTES = ("'", '"')
 
 _PLAN_OPENERS = (
