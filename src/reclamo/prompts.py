@@ -20,6 +20,7 @@ class PromptSettings:
 
     subcall_chars: int = 12_000
     max_depth: int = 1
+    concurrency: int = 1
 
 
 @dataclass(frozen=True)
@@ -67,11 +68,16 @@ def _tools_section(subcall_chars: int, recursive: bool) -> str:
     return "\n".join(lines)
 
 
-def _batching_section(subcall_chars: int) -> str:
+def _batching_section(subcall_chars: int, concurrency: int = 1) -> str:
+    pace = (
+        "runs one call at a time"
+        if concurrency <= 1
+        else f"runs at most {concurrency} calls at a time"
+    )
     return (
         "## IMPORTANT: sub-calls are expensive\n"
         "\n"
-        "`llm_query` runs one call at a time, and each call takes seconds. Do not call it "
+        f"`llm_query` {pace}, and each call takes seconds. Do not call it "
         "once per line, once per record, or inside a tight loop. Batch instead: gather "
         f"about {subcall_chars:,} characters of text into one prompt and ask about the "
         "whole batch. For a context of 1000 lines, that means roughly 10 to 20 calls, "
@@ -135,6 +141,7 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
     """
     subcall_chars = int(getattr(settings, "subcall_chars", 12_000))
     max_depth = int(getattr(settings, "max_depth", 1))
+    concurrency = int(getattr(settings, "concurrency", 1))
     recursive = max_depth > 1
 
     intro = (
@@ -154,7 +161,7 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
         "## The data",
         context_meta.render(),
         _tools_section(subcall_chars, recursive),
-        _batching_section(subcall_chars),
+        _batching_section(subcall_chars, concurrency),
         _examples_section(subcall_chars),
         _rules_section(),
     ]

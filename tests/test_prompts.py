@@ -123,3 +123,13 @@ def test_nudges_and_rejections() -> None:
     assert rej.startswith("That FINAL was not accepted: it appeared next to code")
     assert "FINAL(<answer>)" in forced_final_prompt()
     assert "No code" in forced_final_prompt()
+
+
+def test_batching_wording_follows_concurrency() -> None:
+    from reclamo.prompts import PromptSettings, build_system_prompt
+
+    meta = ContextMeta(kind="str", total_chars=10)
+    one = build_system_prompt(PromptSettings(concurrency=1), meta)
+    four = build_system_prompt(PromptSettings(concurrency=4), meta)
+    assert "runs one call at a time" in one
+    assert "runs at most 4 calls at a time" in four
