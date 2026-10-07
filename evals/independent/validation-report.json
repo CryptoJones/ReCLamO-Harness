@@ -1,0 +1,362 @@
+{
+  "Cerebex": {
+    "main_exit": 1,
+    "main_tail": " contains expense reimbursement emails. Some requests were later amended  ...\n  truth: 910\n[medium] chars=302,976 emails=1468 reports=55\n  question: The archive below contains expense reimbursement emails. Some requests were later amended  ...\n  truth: 2378\n[large] chars=1,211,887 emails=5849 reports=230\n  question: The archive below contains expense reimbursement emails. Some requests were later amended  ...\n  truth: 26956\nTraceback (most recent call last):\n  File \"/g/Cerebex.py\", line 293, in <module>\n    assert score(str(wrong), t) < 1.0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+    "check": {
+      "small": {
+        "chars": 60685,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 1,
+        "truth_tokens": 1,
+        "question": "The archive below contains expense reimbursement emails. Some requests were later amended by follow-up messages; where a message corrects or reverses an earlier one, the correction governs. What is the total dollar amount, in USD, of the travel-category reimbursements whose final status (after all a",
+        "truth": "910"
+      },
+      "medium": {
+        "chars": 302976,
+        "secs": 0.08,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 1,
+        "question": "The archive below contains expense reimbursement emails. Some requests were later amended by follow-up messages; where a message corrects or reverses an earlier one, the correction governs. What is the total dollar amount, in USD, of the travel-category reimbursements whose final status (after all a",
+        "truth": "2378"
+      },
+      "large": {
+        "chars": 1211887,
+        "secs": 1.21,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 1,
+        "question": "The archive below contains expense reimbursement emails. Some requests were later amended by follow-up messages; where a message corrects or reverses an earlier one, the correction governs. What is the total dollar amount, in USD, of the travel-category reimbursements whose final status (after all a",
+        "truth": "26956"
+      }
+    }
+  },
+  "GLaDOS": {
+    "main_exit": 0,
+    "main_tail": "ing the Finance SOP restatement rule, every later change order, and every voidance. Using Bylaw III.7 \u2014 the General Counsel's correction of the informal explainer controls \u2014 identify the current legal name of the certifying member for the last successful restated authorization of that successor. Also state whether that restated authorization passed. Ignore informal commentary that contradicts the bylaws or the SOP.\ntruth={'outcome': 'passed', 'net_amount': 1217525, 'certifying_member': 'Christopher Takeda-Farley', 'name_variants': ['Christopher Takeda-Farley', 'Kit Takeda-Farley']}\nasserts ok\n",
+    "check": {
+      "small": {
+        "chars": 60005,
+        "secs": 0.01,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 4,
+        "truth_tokens": 10,
+        "question": "From the Palisade Regional Transit Cooperative public-records dump, determine the net authorized contract amount (integer USD) for the project that is the current legal successor of the initiative first raised under the working title 'Ridgeline Skip-Stop Relaunch', after applying the Finance SOP res",
+        "truth": "{'outcome': 'passed', 'net_amount': 1587550, 'certifying_member': 'Ingrid Yates-Macrae', 'name_variants': ['Ingrid Yates-Macrae']}"
+      },
+      "medium": {
+        "chars": 300021,
+        "secs": 0.08,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 4,
+        "truth_tokens": 10,
+        "question": "From the Palisade Regional Transit Cooperative public-records dump, determine the net authorized contract amount (integer USD) for the project that is the current legal successor of the initiative first raised under the working title 'Oakbridge Skip-Stop Revival', after applying the Finance SOP rest",
+        "truth": "{'outcome': 'passed', 'net_amount': 1946450, 'certifying_member': 'Caleb Howell-Gupta', 'name_variants': ['Caleb Howell-Gupta']}"
+      },
+      "large": {
+        "chars": 1200079,
+        "secs": 0.41,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 6,
+        "truth_tokens": 12,
+        "question": "From the Palisade Regional Transit Cooperative public-records dump, determine the net authorized contract amount (integer USD) for the project that is the current legal successor of the initiative first raised under the working title 'Westwharf Night Owl Revival', after applying the Finance SOP rest",
+        "truth": "{'outcome': 'passed', 'net_amount': 1217525, 'certifying_member': 'Christopher Takeda-Farley', 'name_variants': ['Christopher Takeda-Farley', 'Kit Takeda-Farley']}"
+      }
+    }
+  },
+  "MasterControl": {
+    "main_exit": 1,
+    "main_tail": "\n=== Size: small ===\nContext length: 61,826 chars\nQuestion: Which employee\u2019s expense report was the only one flagged for both 'duplicate receipts' and 'policy violation (high-risk vendor)' in the final audit summary, and what was the total amount of their flagged expenses?\nTruth: ('Priya Patel', 39195)\nTraceback (most recent call last):\n  File \"/g/MasterControl.py\", line 185, in <module>\n    assert score(str(data[\"answer\"]), data[\"answer\"]) == 1.0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+    "check": {
+      "small": {
+        "chars": 61826,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 3,
+        "question": "Which employee\u2019s expense report was the only one flagged for both 'duplicate receipts' and 'policy violation (high-risk vendor)' in the final audit summary, and what was the total amount of their flagged expenses?",
+        "truth": "('Priya Patel', 39195)"
+      },
+      "medium": {
+        "chars": 300468,
+        "secs": 0.02,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 3,
+        "question": "Which employee\u2019s expense report was the only one flagged for both 'duplicate receipts' and 'policy violation (high-risk vendor)' in the final audit summary, and what was the total amount of their flagged expenses?",
+        "truth": "('Priya Patel', 39195)"
+      },
+      "large": {
+        "chars": 1200856,
+        "secs": 0.12,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 3,
+        "question": "Which employee\u2019s expense report was the only one flagged for both 'duplicate receipts' and 'policy violation (high-risk vendor)' in the final audit summary, and what was the total amount of their flagged expenses?",
+        "truth": "('Priya Patel', 39195)"
+      }
+    }
+  },
+  "Multivac": {
+    "main_exit": 0,
+    "main_tail": "ity review required) (incorporates R7)'}\nMeta: {'num_initial_reqs': 22, 'num_events': 50, 'num_current_reqs': 19}\n\nAll tests passed for medium\n--------------------------------------------------\nSize: large\nContext length: 15,836 characters\nQuestion: What is the current status and full description of requirement R3?\nTruth: {'req_id': 'R31', 'status': 'In Progress', 'description': 'Scalability improvements with 80% coverage (incorporates R27)'}\nMeta: {'num_initial_reqs': 43, 'num_events': 150, 'num_current_reqs': 36}\n\nAll tests passed for large\n--------------------------------------------------\n",
+    "check": {
+      "small": {
+        "chars": 2720,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 10,
+        "truth_tokens": 12,
+        "question": "What is the current status and full description of requirement R9?",
+        "truth": "{'req_id': 'R4', 'status': 'Pending', 'description': 'API integration for sales data (Should be backwards compatible)'}"
+      },
+      "medium": {
+        "chars": 6068,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 10,
+        "truth_tokens": 12,
+        "question": "What is the current status and full description of requirement R7?",
+        "truth": "{'req_id': 'R10', 'status': 'Blocked', 'description': 'Documentation with 80% coverage (Security review required) (incorporates R7)'}"
+      },
+      "large": {
+        "chars": 15836,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 0.5,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 9,
+        "truth_tokens": 11,
+        "question": "What is the current status and full description of requirement R3?",
+        "truth": "{'req_id': 'R31', 'status': 'In Progress', 'description': 'Scalability improvements with 80% coverage (incorporates R27)'}"
+      }
+    }
+  },
+  "Neuromancer": {
+    "main_exit": 1,
+    "main_tail": "tal amount reimbursed for travel expenses that were originally submitted in March, after all adjustments, excluding any that were ultimately denied?\nTruth answer: $0.00\nMeta: {'num_entries': 20, 'num_march_travel': 0, 'num_denied_march_travel': 0, 'total_approved_march_travel': 0.0, 'size': 'small', 'context_length': 55022}\nScore for truth: 1.0\nScore for wrong1 ($0.00): 1.0\nScore for wrong2: 0.0\nScore for wrong3 (no $): 1.0\nTraceback (most recent call last):\n  File \"/g/Neuromancer.py\", line 202, in <module>\n    assert score(wrong1, ans) < 1.0\n           ^^^^^^^^^^^^^^^^^^^^^^^^\nAssertionError\n",
+    "check": {
+      "small": {
+        "chars": 55022,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 0,
+        "question": "What is the total amount reimbursed for travel expenses that were originally submitted in March, after all adjustments, excluding any that were ultimately denied?",
+        "truth": "$0.00"
+      },
+      "medium": {
+        "chars": 295027,
+        "secs": 0.01,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 1,
+        "question": "What is the total amount reimbursed for travel expenses that were originally submitted in March, after all adjustments, excluding any that were ultimately denied?",
+        "truth": "$10832.56"
+      },
+      "large": {
+        "chars": 1195055,
+        "secs": 0.04,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 1,
+        "question": "What is the total amount reimbursed for travel expenses that were originally submitted in March, after all adjustments, excluding any that were ultimately denied?",
+        "truth": "$35616.94"
+      }
+    }
+  },
+  "SELMA": {
+    "main_exit": 0,
+    "main_tail": "Alex Smith' scored: 0.00\n--------------------------------------------------\n=== LARGE ===\nContext length: 1,200,004 characters\nQuestion: After reviewing the entire email thread, who is the final owner responsible for the AI Ethics Review? If no one is currently assigned, respond with 'Unassigned'.\nGround truth answer: Unassigned\nMeta: final owner=None, dept=None\n\nWrong answer 'Assigned' scored: 0.00\nWrong answer 'Someone Else' scored: 0.00\nWrong answer '' scored: 0.00\nWrong answer 'The team' scored: 0.00\nWrong answer 'Alex Smith' scored: 0.00\n--------------------------------------------------\n",
+    "check": {
+      "small": {
+        "chars": 60155,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 2,
+        "question": "After reviewing the entire email thread, who is the final owner responsible for the AI Ethics Review? If no one is currently assigned, respond with 'Unassigned'.",
+        "truth": "Gray Taylor"
+      },
+      "medium": {
+        "chars": 300197,
+        "secs": 0.01,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 2,
+        "question": "After reviewing the entire email thread, who is the final owner responsible for the AI Ethics Review? If no one is currently assigned, respond with 'Unassigned'.",
+        "truth": "Skyler Brown"
+      },
+      "large": {
+        "chars": 1200021,
+        "secs": 0.03,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 0,
+        "truth_tokens": 1,
+        "question": "After reviewing the entire email thread, who is the final owner responsible for the AI Ethics Review? If no one is currently assigned, respond with 'Unassigned'.",
+        "truth": "Unassigned"
+      }
+    }
+  },
+  "SHODAN": {
+    "main_exit": 0,
+    "main_tail": " is the total earned credit for each of these offices: Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst, Gorsehaven? Apply all signed corrections, the final custody findings, each agreement's quality and packaging rules, and the final contact-to-manager-to-office chain. Include offices with zero credits. Return one labeled integer total per office, preferably as a JSON object. Use numerals; do not include intermediate numeric calculations.\nTruth: {\"Alderwick\": 14132, \"Brindleford\": 2857, \"Cairnstead\": 0, \"Dunmere\": 0, \"Elmbridge\": 10676, \"Fenhurst\": 21759, \"Gorsehaven\": 3055}\n\n",
+    "check": {
+      "small": {
+        "chars": 60070,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 7,
+        "truth_tokens": 9,
+        "question": "Reconcile the entire May closing packet. What is the total earned credit for each of these offices: Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst, Gorsehaven? Apply all signed corrections, the final custody findings, each agreement's quality and packaging rules, and the final cont",
+        "truth": "{'Alderwick': 0, 'Brindleford': 0, 'Cairnstead': 0, 'Dunmere': 0, 'Elmbridge': 819, 'Fenhurst': 1968, 'Gorsehaven': 0}"
+      },
+      "medium": {
+        "chars": 301744,
+        "secs": 0.01,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 7,
+        "truth_tokens": 11,
+        "question": "Reconcile the entire May closing packet. What is the total earned credit for each of these offices: Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst, Gorsehaven? Apply all signed corrections, the final custody findings, each agreement's quality and packaging rules, and the final cont",
+        "truth": "{'Alderwick': 3299, 'Brindleford': 0, 'Cairnstead': 0, 'Dunmere': 0, 'Elmbridge': 3342, 'Fenhurst': 8577, 'Gorsehaven': 996}"
+      },
+      "large": {
+        "chars": 1201259,
+        "secs": 0.03,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": false,
+        "truth_tokens_in_context": 7,
+        "truth_tokens": 12,
+        "question": "Reconcile the entire May closing packet. What is the total earned credit for each of these offices: Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst, Gorsehaven? Apply all signed corrections, the final custody findings, each agreement's quality and packaging rules, and the final cont",
+        "truth": "{'Alderwick': 14132, 'Brindleford': 2857, 'Cairnstead': 0, 'Dunmere': 0, 'Elmbridge': 10676, 'Fenhurst': 21759, 'Gorsehaven': 3055}"
+      }
+    }
+  },
+  "TheDixieFlatline": {
+    "main_exit": 0,
+    "main_tail": "ers\nQuestion: What is the final physical location of the asset originally known as 'The Genesis Drive'? Extract ONLY the exact location name.\nTruth: Room 109\nMeta: {'final_holder': 'Helen', 'final_alias': 'The Blue Key 43', 'num_messages': 1702, 'context_length': 260233}\n\n--- Size: LARGE ---\nContext Length: 1072099 characters\nQuestion: What is the final physical location of the asset originally known as 'The Genesis Drive'? Extract ONLY the exact location name.\nTruth: Room 132\nMeta: {'final_holder': 'Orson', 'final_alias': 'The Null Drive 99', 'num_messages': 7002, 'context_length': 1072099}\n\n",
+    "check": {
+      "small": {
+        "chars": 53941,
+        "secs": 0.0,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 2,
+        "question": "What is the final physical location of the asset originally known as 'The Genesis Drive'? Extract ONLY the exact location name.",
+        "truth": "The Annex"
+      },
+      "medium": {
+        "chars": 260233,
+        "secs": 0.01,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 2,
+        "question": "What is the final physical location of the asset originally known as 'The Genesis Drive'? Extract ONLY the exact location name.",
+        "truth": "Room 109"
+      },
+      "large": {
+        "chars": 1072099,
+        "secs": 0.05,
+        "deterministic": true,
+        "seed_varies": true,
+        "self_score": 1.0,
+        "empty_score": 0.0,
+        "truth_verbatim_in_context": true,
+        "truth_tokens_in_context": 2,
+        "truth_tokens": 2,
+        "question": "What is the final physical location of the asset originally known as 'The Genesis Drive'? Extract ONLY the exact location name.",
+        "truth": "Room 132"
+      }
+    }
+  }
+}
