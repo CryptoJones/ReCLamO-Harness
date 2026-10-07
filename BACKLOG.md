@@ -7,7 +7,6 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ### Follow-ups from v0.1
 
-- [ ] Live eval of depth-2 recursion (`rlm_query`) on pluto ([#18](https://github.com/CryptoJones/ReCLamO-Harness/issues/18))
 - [ ] Real benchmark: repeated runs on OOLONG / long-context QA ([#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19))
 - [ ] Optional native tool-calling protocol (`execute_python` tool) ([#20](https://github.com/CryptoJones/ReCLamO-Harness/issues/20))
 - [ ] Independent eval on externally authored data (roundtable-authored generators in `evals/independent/`) ([#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22))
@@ -15,6 +14,10 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] Multi-model sub-calls: per-role endpoints, endpoint pool, optional majority vote ([#26](https://github.com/CryptoJones/ReCLamO-Harness/issues/26))
 
 ## Done
+
+### Follow-ups from v0.1
+
+- [x] Live eval of depth-2 recursion (`rlm_query`) on pluto ([#18](https://github.com/CryptoJones/ReCLamO-Harness/issues/18)) — PR [#28](https://github.com/CryptoJones/ReCLamO-Harness/pull/28): default stays `max_depth=1`
 
 ### Epic: ReCLamO v0.1 — Qwen-tuned RLM harness ([#8](https://github.com/CryptoJones/ReCLamO-Harness/issues/8)) — closed 2026-10-07
 
