@@ -130,6 +130,28 @@ def test_no_code_no_final_gets_a_prompt() -> None:
     assert "no code and no final answer" in lm.root_calls[1]["messages"][-1]["content"]
 
 
+def test_laguna_text_tool_call_executes() -> None:
+    # Issue #48: Poolside Laguna writes its code as a text-form <tool_call>.
+    call = "<tool_call>repl\nn = len(context.splitlines())\nprint(n)\n</arg_value></tool_call>"
+    result, lm = _run([call, "FINAL(There are 3 lines.)"])
+    assert (result.answer, result.iterations) == ("There are 3 lines.", 2)
+    nxt = lm.root_calls[1]["messages"][-1]["content"]
+    assert nxt.startswith("[output]\n3\n")
+    assert "no code and no final answer" not in nxt
+
+
+def test_laguna_invented_output_after_tool_call_is_discarded() -> None:
+    # Only the leading block runs; the fake output, the later call and the FINAL_VAR
+    # that relies on it are dropped, so x keeps the value the real block gave it.
+    reply = (
+        "<tool_call>repl\nx = 1\nprint('ran', x)\n</think>```repl\nran 99\n```\n"
+        "<tool_call>repl\nx = 99\n</tool_call>\nFINAL_VAR(x)"
+    )
+    result, lm = _run([reply, "FINAL_VAR(x)"])
+    assert (result.answer, result.iterations) == ("1", 2)
+    assert lm.root_calls[1]["messages"][-1]["content"].startswith("[output]\nran 1\n")
+
+
 # --- sub-calls and recursion --------------------------------------------------
 
 

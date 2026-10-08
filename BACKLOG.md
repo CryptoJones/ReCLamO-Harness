@@ -19,6 +19,13 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 - [ ] Real benchmark: repeated runs on OOLONG / long-context QA ([#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19))
 
+### Harness bugs from the round-3 / #22 re-run
+
+- [ ] Fence parser misses Poolside Laguna's native `<tool_call>` syntax (turns become no_action) ([#48](https://github.com/CryptoJones/ReCLamO-Harness/issues/48))
+- [ ] Compaction does not guarantee the request fits the context window (no output reserve, oversized single turn) ([#49](https://github.com/CryptoJones/ReCLamO-Harness/issues/49))
+- [ ] `max_errors` raises `RLMErrorLimit` with no forced finish, losing the run's work ([#50](https://github.com/CryptoJones/ReCLamO-Harness/issues/50))
+- [ ] `max_timeout` can be overrun: deadline checked only at turn start, out-of-turns forced finish unbounded ([#51](https://github.com/CryptoJones/ReCLamO-Harness/issues/51))
+
 ## Done
 
 ### Follow-ups from v0.1

@@ -10,6 +10,17 @@ Qwen quirks handled here:
 * its thinking can contain literal ``FINAL(`` text that must be ignored;
 * it sometimes emits ``FINAL(...)`` in the same turn as code it has not run;
 * it sometimes answers with its plan instead of the answer.
+
+Other models' quirks:
+
+* Poolside Laguna (issue #48) writes code in its native tool-call syntax as plain
+  text, ``<tool_call>repl\n<code></arg_value></tool_call>``, with the closing tags
+  varying (``</arg_value>``, ``</value>``, ``</repl>``, ``</tool_call>``, a stray
+  ``</think>``, or none at all) and sometimes a trailing ``description`` argument.
+  It can also write several such blocks in one reply with *invented* REPL output
+  between them, so when a reply's first code is a ``<tool_call>`` only that block
+  counts and everything after it is discarded. ``<tool_call>FINAL(...)`` is read
+  as ``FINAL(...)``.
 """
 
 from __future__ import annotations
@@ -38,6 +49,27 @@ _FINAL_HEAD = re.compile(
     re.MULTILINE,
 )
 _QUOTES = ("'", '"')
+
+# Laguna's text-form tool call (#48). The code starts on the line after the name and
+# runs to the first terminator (or the end of the text). A new <tool_call> also ends
+# it, so two blocks with no closing tags between them stay two blocks.
+_TOOL_CALL_LANGS = ("repl", "python", "execute_python")
+_TOOL_CALL_OPEN = re.compile(
+    r"<tool_call>[ \t]*(?P<name>" + "|".join(_TOOL_CALL_LANGS) + r")[ \t]*\r?\n"
+)
+_TOOL_CALL_END = re.compile(r"</arg_value>|</value>|</repl>|</tool_call>|</think>|(?=<tool_call>)")
+# A GLM-style wrapper before the code (not seen from Laguna, but cheap to accept).
+_TOOL_CALL_ARG_PREFIX = re.compile(r"\A\s*<arg_key>[^<]*</arg_key>\s*<arg_value>")
+# What may follow the terminator and still belong to the call: trailing arguments
+# (Laguna adds a "description") and the closing tag.
+_TOOL_CALL_TAIL = re.compile(
+    r"(?:\s*<arg_key>[^<]*</arg_key>\s*<arg_value>.*?</arg_value>)*(?:\s*</tool_call>)?",
+    re.DOTALL,
+)
+# <tool_call>FINAL(...) / <tool_call>FINAL_VAR(...): read as a line-start FINAL.
+_TOOL_CALL_FINAL = re.compile(r"<tool_call>(?=[ \t]*FINAL(?:_VAR)?\s*\()")
+_TOOL_CALL_LEFTOVER = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)", re.DOTALL)
+_STRAY_THINK_CLOSE = re.compile(r"</think>")
 
 _PLAN_OPENERS = (
     "i will ",
@@ -85,41 +117,111 @@ def strip_think(text: str) -> str:
     return _THINK_OPEN.sub("", text)
 
 
+@dataclass(frozen=True)
+class _Block:
+    """One fenced block or text-form tool call: its span, and its code (None if not code)."""
+
+    start: int
+    end: int
+    code: str | None
+    tool_call: bool
+
+
+def _fence_code(m: re.Match[str], langs: set[str]) -> str | None:
+    if m.group("lang").lower() not in langs:
+        return None
+    body = m.group("body")
+    return body[:-1] if body.endswith("\n") else body
+
+
+def _tool_call_block(text: str, m: re.Match[str]) -> _Block:
+    body_start = m.end()
+    end = _TOOL_CALL_END.search(text, body_start)
+    body_end = end.start() if end else len(text)
+    stop = end.end() if end else len(text)
+    tail = _TOOL_CALL_TAIL.match(text, stop)
+    if tail:
+        stop = tail.end()
+    code = _TOOL_CALL_ARG_PREFIX.sub("", text[body_start:body_end]).rstrip()
+    return _Block(m.start(), stop, code, tool_call=True)
+
+
+def _scan(text: str) -> tuple[str, list[_Block]]:
+    """Find fences and text-form tool calls in document order (thinking already removed).
+
+    Returns the text that counts and its blocks. When the first block that holds
+    code is a ``<tool_call>``, the text is cut right after it: Laguna follows such a
+    block with invented REPL output (often in a ```repl fence) and more calls built
+    on it, none of which may run or be read as an answer.
+    """
+    blocks: list[_Block] = []
+    pos = 0
+    while True:
+        fm = _FENCE.search(text, pos)
+        tm = _TOOL_CALL_OPEN.search(text, pos)
+        if fm is None and tm is None:
+            break
+        if fm is not None and (tm is None or fm.start() < tm.start()):
+            blocks.append(_Block(fm.start(), fm.end(), _fence_code(fm, _FENCE_LANGS), False))
+            pos = fm.end()
+        else:
+            assert tm is not None
+            block = _tool_call_block(text, tm)
+            blocks.append(block)
+            pos = block.end
+    first = next((b for b in blocks if b.code is not None), None)
+    if first is not None and first.tool_call:
+        return text[: first.end], [b for b in blocks if b.end <= first.end]
+    return text, blocks
+
+
 def find_code_blocks(text: str, strict: bool = False) -> list[str]:
-    """Return the bodies of ```` ```repl ```` (and, unless strict, ```` ```python ````) fences.
+    """Return the code of ```` ```repl ````/```` ```python ```` fences and ``<tool_call>`` blocks.
 
     Blocks inside ``<think>`` are ignored. Bodies keep their internal newlines;
-    a single trailing newline is dropped.
+    a single trailing newline is dropped. Order is document order, except that a
+    reply whose first code is a ``<tool_call>`` yields only that block (``_scan``).
+
+    ``strict`` keeps only ```` ```repl ```` fences: the upstream rlm protocol, with
+    no ``python`` fences and no text-form tool calls.
     """
-    langs = {"repl"} if strict else _FENCE_LANGS
-    blocks: list[str] = []
-    for m in _FENCE.finditer(strip_think(text)):
-        if m.group("lang").lower() in langs:
-            body = m.group("body")
-            blocks.append(body[:-1] if body.endswith("\n") else body)
-    return blocks
+    visible = strip_think(text)
+    if strict:
+        found = (_fence_code(m, {"repl"}) for m in _FENCE.finditer(visible))
+        return [c for c in found if c is not None]
+    _, blocks = _scan(visible)
+    return [b.code for b in blocks if b.code is not None]
 
 
 _FENCE_OPEN_TAIL = re.compile(r"^[ \t]*```.*\Z", re.DOTALL | re.MULTILINE)
 
 
 def strip_code(text: str) -> str:
-    """Remove thinking and every fenced block (any language, closed or cut off).
+    """Remove thinking and every code block (any language, closed or cut off).
 
-    What is left is the prose of the reply, stripped. Used by the forced finish
-    so a reply that is a code block is never taken as the answer.
+    That covers fences and text-form ``<tool_call>`` blocks, and whatever a leading
+    ``<tool_call>`` block makes us discard (``_scan``). What is left is the prose of
+    the reply, stripped. Used by the forced finish so a reply that is a code block
+    is never taken as the answer.
     """
-    visible = _FENCE.sub("", strip_think(text))
+    visible, blocks = _scan(strip_think(text))
+    for b in reversed(blocks):
+        visible = visible[: b.start] + visible[b.end :]
+    visible = _TOOL_CALL_LEFTOVER.sub("", visible)
+    visible = _STRAY_THINK_CLOSE.sub("", visible)
     return _FENCE_OPEN_TAIL.sub("", visible).strip()
 
 
-def _blank_fences(text: str) -> str:
-    """Replace every fenced block (any language) with whitespace of the same length.
+def _blank_blocks(text: str, blocks: list[_Block]) -> str:
+    """Replace every block (any fence, or a tool call) with spaces of the same length.
 
     Keeping the length means match offsets stay comparable, which matters for
-    "last occurrence wins".
+    "last occurrence wins". A ``<tool_call>`` right before ``FINAL(`` becomes a
+    newline plus spaces, so the candidate starts its own line.
     """
-    return _FENCE.sub(lambda m: " " * len(m.group(0)), text)
+    for b in blocks:
+        text = text[: b.start] + " " * (b.end - b.start) + text[b.end :]
+    return _TOOL_CALL_FINAL.sub(lambda m: "\n" + " " * (len(m.group(0)) - 1), text)
 
 
 def _balanced_span(text: str, open_idx: int) -> int | None:
@@ -171,11 +273,14 @@ def looks_like_plan(s: str) -> bool:
 def find_final(text: str) -> FinalCandidate | None:
     """Find the last ``FINAL(...)`` / ``FINAL_VAR(...)`` outside code and thinking.
 
+    ``<tool_call>FINAL(...)`` counts too. Text discarded after a leading
+    ``<tool_call>`` code block (``_scan``) is never searched.
+
     Returns None when there is none, or when the only occurrences are unbalanced.
     """
-    visible = strip_think(text)
-    has_code = bool(find_code_blocks(visible))
-    prose = _blank_fences(visible)
+    visible, blocks = _scan(strip_think(text))
+    has_code = any(b.code is not None for b in blocks)
+    prose = _blank_blocks(visible, blocks)
 
     best: tuple[int, FinalKind, str] | None = None
     for m in _FINAL_HEAD.finditer(prose):
