@@ -809,6 +809,21 @@ is honoured once and logged as a protocol slip. The fence prompt is unchanged. S
 returns structured `tool_calls` for Qwen3.8-Flash-Next, so there is no text-parsing
 fallback.
 
+**Text-form tool calls ([#48](https://github.com/CryptoJones/ReCLamO-Harness/issues/48)).**
+Some servers do not parse a model's native tool-call syntax and leave it in the message
+text. Poolside Laguna S 2.1 does this: it writes `<tool_call>repl\n<code></arg_value></tool_call>`
+in a fence-protocol run. The fence parser accepts that form as a code block (names
+`repl`, `python`, `execute_python`). The code ends at the first `</arg_value>`,
+`</value>`, `</repl>`, `</tool_call>` or `</think>`, or at the end of the reply, and
+trailing arguments such as `description` are ignored. **If a reply's first code is a
+`<tool_call>`, only that block runs and the rest of the reply is discarded.** Laguna
+sometimes follows the block with REPL output it made up, often in a ```` ```repl ````
+fence, and then more calls and a `FINAL` built on that output. A reply that opens with
+a fence is handled as before, with any later tool calls run in document order.
+`<tool_call>FINAL(...)` counts as `FINAL(...)`, under the same rules: next to code that
+has not run yet, it is rejected. Strict parsing (```` ```repl ```` fences only, the
+upstream protocol) ignores this form.
+
 Run 2026-10-07 on the same server and profile as above. Both protocols were
 interleaved per seed, and each row took the pluto lock on its own. `bench.py --modes rlm
 --protocol {fence,tools} --seeds 3` gives the raw rows in

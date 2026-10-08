@@ -5,6 +5,7 @@ from reclamo.parsing import (
     find_code_blocks,
     find_final,
     looks_like_plan,
+    strip_code,
     strip_think,
 )
 
@@ -207,3 +208,151 @@ def test_looks_like_plan_cases() -> None:
     assert not looks_like_plan("42")
     assert not looks_like_plan("The answer is Paris.")
     assert not looks_like_plan("")
+
+
+# --- Laguna text-form tool calls (#48) ----------------------------------------
+# Samples 1-5 are verbatim message contents from the ronin28 round-3 run at a30aea5
+# (sample 5 is the tail of its message). Sample 6 is a short synthetic version of an
+# ~11K-char reply that invented REPL output between a dozen blocks.
+
+INSPECT = (
+    'print("type:", type(context))\nprint("len:", len(context))\nprint("first 600 chars:")\n'
+    'print(context[:600])\nprint("----")\nprint("last 400 chars:")\nprint(context[-400:])'
+)
+SHORT = "print(type(context))\nprint(len(context))\nprint(repr(context[:500]))"
+LAGUNA_1 = f"<tool_call>repl\n{INSPECT}\n</arg_value></tool_call>"
+LAGUNA_2 = f"<tool_call>repl\n{INSPECT}\n</repl>"
+DESCRIPTION = (
+    "<arg_key>description</arg_key><arg_value>Inspect context type, length, and first 500 "
+    "chars</arg_value></tool_call>"
+)
+LAGUNA_3 = f"<tool_call>repl\n{SHORT}\n</arg_value>{DESCRIPTION}"
+LAGUNA_4 = (
+    "I see I need to provide the code in a proper REPL block. Let me inspect the context "
+    f"first.<tool_call>repl\n{SHORT}\n</value>{DESCRIPTION}"
+)
+LAGUNA_5 = (
+    "...Let me calculate the total:\n\n```repl\ntotal = 3782 + 1819 + 3293 + 117 + 1974 + 350 "
+    '+ 4535 + 1874 + 4422 + 4629 + 1892 + 3509\nprint(f"Total: ${total}")\n```\n\nThe output '
+    "should give me the total dollar amount.\n\nFINAL: Priya Patel's expense report was the "
+    'only one flagged ... $32,196.00 for her flagged expenses.<tool_call>FINAL("Priya '
+    "Patel's expense report was the only one flagged for both 'double-dipped invoices' and "
+    "'non-compliant vendor' in the final audit summary, with a total dollar amount of "
+    '$32,196.00 for her flagged expenses.")'
+)
+LAGUNA_6 = (
+    f"<tool_call>repl\n{SHORT}\n</think>```repl\n<class 'str'>\n64468\n'Project Requirements "
+    "Document\\nVersion: 2.1'\n```\nThe requirements use ids like R12. Let me retry that last "
+    "command.</think><tool_call>repl\nimport re\nids = re.findall(r'R\\d{2,3}', context)\n"
+    "</think>```repl\n['R12', 'R130']\n```\nFINAL(R12 and R130)\n"
+    "<tool_call>repl\nprint(ids)\n</tool_call>"
+)
+
+
+@pytest.mark.parametrize(
+    ("text", "code"),
+    [(LAGUNA_1, INSPECT), (LAGUNA_2, INSPECT), (LAGUNA_3, SHORT), (LAGUNA_4, SHORT)],
+    ids=["arg_value+tool_call", "repl-close", "description-arg", "value-close+prose"],
+)
+def test_laguna_tool_call_samples(text: str, code: str) -> None:
+    assert find_code_blocks(text) == [code]
+    assert find_final(text) is None
+    compile(code, "<laguna>", "exec")
+
+
+def test_laguna_prose_before_tool_call_survives_strip_code() -> None:
+    assert strip_code(LAGUNA_4) == (
+        "I see I need to provide the code in a proper REPL block. Let me inspect the context first."
+    )
+    assert strip_code(LAGUNA_3) == ""
+
+
+def test_tool_call_final_next_to_unrun_fence_is_rejected() -> None:
+    blocks = find_code_blocks(LAGUNA_5)
+    assert len(blocks) == 1 and blocks[0].startswith("total = 3782")
+    cand = find_final(LAGUNA_5)
+    assert cand is not None and cand.kind == "FINAL" and cand.has_code is True
+    assert cand.value.startswith("\"Priya Patel's expense report")
+
+
+def test_tool_call_final_alone_is_a_final() -> None:
+    assert find_final('<tool_call>FINAL("42")</tool_call>') == FinalCandidate(
+        "FINAL", '"42"', False, False
+    )
+    cand = find_final("Done.<tool_call>FINAL_VAR(result)")
+    assert cand is not None and (cand.kind, cand.value) == ("FINAL_VAR", "result")
+
+
+def test_leading_tool_call_discards_invented_output_and_later_blocks() -> None:
+    # Only the first block runs: the ```repl fences after it hold fabricated output,
+    # and the later calls and the FINAL are built on that fiction.
+    assert find_code_blocks(LAGUNA_6) == [SHORT]
+    assert find_final(LAGUNA_6) is None
+    assert strip_code(LAGUNA_6) == ""
+
+
+def test_stray_think_close_does_not_swallow_content() -> None:
+    assert strip_think(LAGUNA_6) == LAGUNA_6
+    assert strip_think("answer</think>tail") == "answer</think>tail"
+    assert strip_code("The answer is 4.</think>") == "The answer is 4."
+
+
+def test_glm_style_arg_wrapper_before_code_is_stripped() -> None:
+    text = (
+        "<tool_call>repl\n<arg_key>code</arg_key><arg_value>x = 1\nprint(x)</arg_value></tool_call>"
+    )
+    assert find_code_blocks(text) == ["x = 1\nprint(x)"]
+
+
+def test_python_and_execute_python_names_accepted_other_names_ignored() -> None:
+    assert find_code_blocks("<tool_call>python\nx = 1\n</tool_call>") == ["x = 1"]
+    assert find_code_blocks("<tool_call>execute_python\nx = 2\n</tool_call>") == ["x = 2"]
+    assert find_code_blocks("<tool_call>bash\nls\n</tool_call>") == []
+    assert strip_code("Hi.<tool_call>bash\nls\n</tool_call>") == "Hi."
+
+
+def test_fence_first_keeps_document_order_with_tool_calls() -> None:
+    text = (
+        "```repl\na = 1\n```\nthen<tool_call>repl\nb = 2\n</tool_call>\n"
+        "```python\nc = 3\n```\n<tool_call>repl\nd = 4\n</arg_value></tool_call>"
+    )
+    assert find_code_blocks(text) == ["a = 1", "b = 2", "c = 3", "d = 4"]
+
+
+def test_multiple_closed_tool_calls_only_the_first_runs() -> None:
+    text = "<tool_call>repl\nx = 1\n</tool_call>\n<tool_call>repl\ny = 2\n</tool_call>"
+    assert find_code_blocks(text) == ["x = 1"]
+    # With no closers, the next <tool_call> still ends the first block.
+    assert find_code_blocks("<tool_call>repl\nx = 1\n<tool_call>repl\ny = 2\n") == ["x = 1"]
+
+
+def test_tool_call_inside_think_ignored() -> None:
+    text = "<think>\n<tool_call>repl\nprint('fake')\n</tool_call>\n</think>\n```repl\nok = 1\n```"
+    assert find_code_blocks(text) == ["ok = 1"]
+    assert find_code_blocks("<think><tool_call>repl\nprint('fake')\n</tool_call></think>") == []
+
+
+def test_final_inside_tool_call_not_detected() -> None:
+    text = "<tool_call>repl\nx = 1\nFINAL(x)\n</tool_call>"
+    assert find_code_blocks(text) == ["x = 1\nFINAL(x)"]
+    assert find_final(text) is None
+    assert strip_code(text) == ""
+
+
+def test_final_next_to_tool_call_code_sets_has_code() -> None:
+    text = "FINAL(41)\n<tool_call>repl\nprint(42)\n</tool_call>"
+    cand = find_final(text)
+    assert cand is not None and cand.value == "41" and cand.has_code is True
+
+
+def test_unclosed_tool_call_runs_to_end_of_text() -> None:
+    # Many Laguna blocks have no closing tag at all, so end of text is a terminator.
+    text = "Inspecting.<tool_call>repl\nprint(len(context))\nFINAL(3)"
+    assert find_code_blocks(text) == ["print(len(context))\nFINAL(3)"]
+    assert find_final(text) is None
+    assert strip_code(text) == "Inspecting."
+
+
+def test_strict_mode_excludes_tool_calls() -> None:
+    text = "<tool_call>repl\nx = 1\n</tool_call>\n```python\ny = 2\n```\n```repl\nz = 3\n```\n"
+    assert find_code_blocks(text, strict=True) == ["z = 3"]

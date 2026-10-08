@@ -170,6 +170,16 @@ def test_final_var_after_code_in_same_turn_is_accepted() -> None:
     assert (result.answer, result.stop_reason, result.iterations) == ("forty-two", "final_var", 1)
 
 
+def test_laguna_text_tool_call_runs_in_upstream_style() -> None:
+    # Issue #48: the text-form <tool_call> flows through this style's output messages too.
+    reply = "<tool_call>repl\nmagic = 42\nprint(magic)\n</repl>"
+    result, lm = _run([reply, "FINAL_VAR(magic)"])
+    assert (result.answer, result.stop_reason, result.iterations) == ("42", "final_var", 2)
+    out = lm.root_calls[1]["messages"][3]["content"]
+    assert out.startswith("Code executed:\n```python\nmagic = 42\nprint(magic)\n```")
+    assert "REPL output:\n\n42\n" in out
+
+
 def test_final_text_next_to_code_still_rejected_and_nudge_follows_outputs() -> None:
     result, lm = _run(["```repl\nprint(1)\n```\nFINAL(42)", "FINAL(42)"])
     assert (result.answer, result.iterations) == ("42", 2)
