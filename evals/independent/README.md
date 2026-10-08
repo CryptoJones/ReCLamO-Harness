@@ -97,4 +97,31 @@ Running these against the harness and the plain model is tracked in
 [#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22). The prompt and defaults
 are frozen before that run, with no tuning on these tasks.
 
+```sh
+# The frozen #22 run: rlm vs plain, resumable, one task x size per batch
+uv run python evals/independent/run_eval.py --profile pluto --sizes small --out runs/independent.json
+uv run python evals/independent/run_eval.py --profile pluto --sizes medium --resume runs/independent.json
+uv run python evals/independent/run_eval.py --summary-only runs/independent.json
+```
+
+## Results
+
+The frozen run (harness at `e17580f`, 80 rows, 2026-10-07) is written up in the main
+README under
+[Independent evaluation](../../README.md#independent-evaluation-tasks-written-by-other-models).
+In short: below the model's window the plain model beat the harness. Above it, only the
+harness can answer, and it was exact on 5/12 answerable medium cells and 1/6 large
+ones. The run also found answer-key defects in three generators, which the files here
+keep unchanged:
+
+- Multivac: the key is for a different requirement than the one the question asks
+  about.
+- TheDixieFlatline: the starting offices are never stated, so some answers are not in
+  the text.
+- SELMA: a silent `unassign` event can make the key "Unassigned" when the last email
+  names a lead.
+
+It also found that MasterControl's scorer rejects a name that is written inside a
+sentence.
+
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*
