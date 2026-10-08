@@ -239,12 +239,13 @@ def final_rejection(reason: str, protocol: str = "fence") -> str:
 
 
 def forced_final_prompt(why: str = "turns", protocol: str = "fence") -> str:
-    """``why`` is "turns", "time" or "errors" (``max_errors`` failed runs in a row)."""
-    lead = (
-        "Your code has failed too many times in a row, so the run stops here."
-        if why == "errors"
-        else f"You are out of {why}."
-    )
+    """``why`` is "turns", "time", "errors" (``max_errors`` failed runs in a row) or
+    "context" (the request cannot fit the window, issue #49)."""
+    leads = {
+        "errors": "Your code has failed too many times in a row, so the run stops here.",
+        "context": "The conversation no longer fits the context window, so the run stops here.",
+    }
+    lead = leads.get(why, f"You are out of {why}.")
     if protocol == "tools":
         return (
             f"{lead} Call final_answer now with your best answer, or with "

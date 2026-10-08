@@ -22,7 +22,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 ### Harness bugs from the round-3 / #22 re-run
 
 - [x] Fence parser misses Poolside Laguna's native `<tool_call>` syntax (turns become no_action) ([#48](https://github.com/CryptoJones/ReCLamO-Harness/issues/48)) — PR [#52](https://github.com/CryptoJones/ReCLamO-Harness/pull/52)
-- [ ] Compaction does not guarantee the request fits the context window (no output reserve, oversized single turn) ([#49](https://github.com/CryptoJones/ReCLamO-Harness/issues/49))
+- [x] Compaction does not guarantee the request fits the context window (no output reserve, oversized single turn) ([#49](https://github.com/CryptoJones/ReCLamO-Harness/issues/49))
 - [x] `max_errors` raises `RLMErrorLimit` with no forced finish, losing the run's work ([#50](https://github.com/CryptoJones/ReCLamO-Harness/issues/50))
 - [x] `max_timeout` can be overrun: deadline checked only at turn start, out-of-turns forced finish unbounded ([#51](https://github.com/CryptoJones/ReCLamO-Harness/issues/51))
 

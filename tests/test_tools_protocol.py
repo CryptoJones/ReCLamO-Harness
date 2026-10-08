@@ -378,7 +378,8 @@ def test_length_finish_without_tool_calls_retries_without_thinking() -> None:
 
 
 def test_compaction_keeps_tool_messages_valid() -> None:
-    cfg = _cfg(context_tokens=1_600, max_iterations=8)
+    root_cfg = ModelConfig(model="m", enable_thinking=True, max_tokens=256)
+    cfg = _cfg(context_tokens=2_800, max_iterations=8, root=root_cfg)
     root = [tool_turn(py(f"print('{c}' * 400)")) for c in "xyzwvu"]
     root.append(tool_turn(call("final_answer", answer="done")))
     result, lm = _run(root, cfg=cfg)

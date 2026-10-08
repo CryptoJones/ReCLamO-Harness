@@ -114,7 +114,12 @@ REPLFactory = Callable[[RLMConfig, LLMHandler], REPL]
 # the model's forced reply is not a usable final.
 ANSWER_VAR_NAMES = ("final_answer", "answer_text", "result", "final")
 # Forced-finish ``why`` -> the run's stop_reason.
-FORCED_STOP_REASONS = {"turns": "max_iterations", "time": "timeout", "errors": "error_limit"}
+FORCED_STOP_REASONS = {
+    "turns": "max_iterations",
+    "time": "timeout",
+    "errors": "error_limit",
+    "context": "context_overflow",
+}
 # Issue #51: every forced finish is one attempt (no HTTP retry) whose request timeout is
 # min(root timeout, time left before max_timeout + FORCED_FINISH_TIMEOUT). Past the
 # deadline that is min(root timeout, 60 s), thinking off. Root and sub requests in the
@@ -125,12 +130,25 @@ FORCED_STOP_REASONS = {"turns": "max_iterations", "time": "timeout", "errors": "
 # because killing the worker would lose every variable the forced finish needs.
 FORCED_FINISH_TIMEOUT = 60.0
 CHARS_PER_TOKEN = 3.5
+# Issue #49: the request must fit the window with room for the root reply. The input
+# budget is context_tokens - root max_tokens - FIT_MARGIN * context_tokens (the margin
+# absorbs estimate error), never below MIN_BUDGET_FRACTION * context_tokens.
+FIT_MARGIN = 0.10
+MIN_BUDGET_FRACTION = 0.25
+MESSAGE_OVERHEAD_TOKENS = 4  # chat-template tokens around each message
+# A REPL output shrunk to fit keeps at least this many chars (head + tail), else none.
+MIN_KEPT_CHARS = 200
 KEEP_RECENT_TURNS = 4
 SUMMARY_CHARS = 1_500
 NO_ACTION_PROMPT = no_action_prompt("fence")
 TIME_UP = "the run's time (max_timeout) ran out"
+FIT_STUB = (
+    "[... {cut} of {total} chars of this REPL output elided to fit the context window; "
+    "the full text is in the REPL variable `history` ...]"
+)
 ERROR_LIMIT = "the run stopped at the error limit"
 TOOL_NAMES = ("execute_python", "final_answer")
+OPENING_KINDS = ("system", "query", "meta")  # history kinds a cut-down forced finish keeps
 RLM_QUERY_PROMPT = (
     "The context holds a task handed down by a parent process: instructions and the "
     "data they apply to. Carry out the task and finish with the result."
@@ -189,6 +207,68 @@ def describe_context(context: Any) -> tuple[str, ContextMeta]:
         total = sum(chunks) if chunks is not None else len(json.dumps(context))
         return "json", ContextMeta(f"dict with {len(context)} keys", total, chunks)
     raise TypeError(f"context must be str, list or dict, not {type(context).__name__}")
+
+
+def estimate_tokens(text: str) -> int:
+    """Prompt-token estimate: one token per digit (Qwen splits numbers into digits),
+    ``CHARS_PER_TOKEN`` chars per token for everything else (as ``examples/bench.py``)."""
+    digits = sum(c.isdigit() for c in text)
+    return digits + int((len(text) - digits) / CHARS_PER_TOKEN + 0.999)
+
+
+def message_tokens(message: dict[str, Any]) -> int:
+    calls = message.get("tool_calls")
+    text = (message.get("content") or "") + (json.dumps(calls) if calls else "")
+    return estimate_tokens(text) + MESSAGE_OVERHEAD_TOKENS
+
+
+def request_tokens(messages: list[dict[str, Any]], extra: int = 0) -> int:
+    """Estimated prompt tokens of a request: its messages plus ``extra`` (tools, etc.)."""
+    return sum(message_tokens(m) for m in messages) + extra
+
+
+@dataclass
+class _Piece:
+    """Part of a stored user/tool message. Shrinkable pieces are REPL output (#49)."""
+
+    text: str
+    shrinkable: bool = False
+    orig: str = ""
+    kept: int = -1  # chars of ``orig`` kept; -1 = all
+
+    def __post_init__(self) -> None:
+        if self.shrinkable and not self.orig:
+            self.orig = self.text
+
+
+def _join_parts(parts: list[str | tuple[str, str]]) -> list[_Piece]:
+    """Pieces for parts joined by blank lines; ``(header, output)`` is a block's output."""
+    pieces: list[_Piece] = []
+    for n, part in enumerate(parts):
+        if n:
+            pieces.append(_Piece("\n\n"))
+        if isinstance(part, tuple):
+            header, output = part
+            pieces.append(_Piece(f"{header}\n"))
+            pieces.append(_Piece(output, shrinkable=True))
+        else:
+            pieces.append(_Piece(part))
+    return pieces
+
+
+def _upstream_pieces(code: str, res: ExecResult, limit: int) -> list[_Piece]:
+    msg = upstream_code_output(code, res, limit)
+    prefix = f"Code executed:\n```python\n{code.strip()}\n```\n\nREPL output:\n"
+    if not msg.startswith(prefix):  # defensive: never shrink what we cannot split
+        return [_Piece(msg)]
+    return [_Piece(prefix), _Piece(msg[len(prefix) :], shrinkable=True)]
+
+
+def _clip_middle(text: str, keep: int) -> str:
+    """Keep ``keep`` chars of ``text`` (head and tail) around a stub saying what went."""
+    stub = FIT_STUB.format(cut=len(text) - keep, total=len(text))
+    head = keep // 2
+    return f"{text[:head]}{stub}{text[len(text) - (keep - head) :] if keep - head else ''}"
 
 
 def _strip_quotes(value: str) -> str:
@@ -274,6 +354,9 @@ class RLM:
         self._context_chars = 0
         self._turn_max_prompt = 0
         self._full_history: list[dict[str, Any]] = []
+        self._kinds: list[str] = []
+        self._repl: REPL | None = None
+        self._pieces: dict[int, list[_Piece]] = {}  # history index -> shrinkable layout
         self._stats = _new_stats()
         self._last_output: str | None = None
         self._context: Any = None
@@ -306,6 +389,7 @@ class RLM:
             ],
         )
         repl = self._repl_factory(cfg, self._handle_subcall)
+        self._repl = repl
         repl.start(context, kind)
         try:
             return self._run(repl, query, meta, started)
@@ -335,6 +419,7 @@ class RLM:
             ]
             kinds = ["system", "query"]  # parallel to history; "repl" marks REPL-output turns
         self._full_history = list(history)
+        self._kinds = kinds
 
         prev_code_hash: str | None = None
         prev_vars: set[str] = set()
@@ -358,7 +443,9 @@ class RLM:
             if self.depth > 0:
                 assert self._budget is not None
                 self._budget.child_turns += 1
-            self._maybe_compact(history, kinds, repl, i)
+            extra = estimate_tokens(upstream_user_prompt(query, i - 1)) if upstream else 0
+            if not self._maybe_compact(history, kinds, repl, i, extra):
+                return self._context_overflow(history, repl, answer_state, i - 1, started, extra)
             self._turn_max_prompt = 0
             messages_in = len(history)
 
@@ -456,15 +543,15 @@ class RLM:
                 return self._forced_finish(history, repl, answer_state, i, started, why="time")
 
             # Compose the next user message: outputs, then notes, then the turn line.
-            parts: list[str] = []
+            parts: list[str | tuple[str, str]] = []
             if upstream:
                 for block, res in zip(blocks, results, strict=True):
-                    msg = upstream_code_output(block, res, cfg.output_truncate_chars)
-                    self._append(history, kinds, {"role": "user", "content": msg}, "repl")
+                    pieces = _upstream_pieces(block, res, cfg.output_truncate_chars)
+                    self._append_pieces(history, kinds, {"role": "user"}, pieces, "repl")
             else:
                 for k, res in enumerate(results, 1):
                     header = f"[block {k} output]" if len(results) > 1 else "[output]"
-                    parts.append(f"{header}\n{res.output or '(no output)'}")
+                    parts.append((header, res.output or "(no output)"))
 
             if blocks:
                 code_hash = hashlib.sha256(
@@ -492,13 +579,13 @@ class RLM:
             parts.extend(notes)
             if upstream:
                 if parts:  # our nudges, as their own user message after the outputs
-                    msg = {"role": "user", "content": "\n\n".join(parts)}
+                    msg = {"role": "user", "content": "\n\n".join(notes)}
                     self._append(history, kinds, msg, "note")
             else:
                 if i < n:
                     parts.append(turn_prompt(i + 1, n))
-                msg = {"role": "user", "content": "\n\n".join(parts)}
-                self._append(history, kinds, msg, "repl")
+                pieces = _join_parts(parts)
+                self._append_pieces(history, kinds, {"role": "user"}, pieces, "repl")
             self._log_iteration(i, messages_in, completion, blocks, results, notes, decision)
 
         return self._forced_finish(history, repl, answer_state, iterations, started)
@@ -515,6 +602,8 @@ class RLM:
         ]
         kinds = ["system", "query"]
         self._full_history = list(history)
+        self._kinds = kinds
+        tools_tokens = estimate_tokens(json.dumps(tools))
 
         prev_code_hash: str | None = None
         prev_vars: set[str] = set()
@@ -535,7 +624,10 @@ class RLM:
             if self.depth > 0:
                 assert self._budget is not None
                 self._budget.child_turns += 1
-            self._maybe_compact(history, kinds, repl, i)
+            if not self._maybe_compact(history, kinds, repl, i, tools_tokens):
+                return self._context_overflow(
+                    history, repl, answer_state, i - 1, started, tools_tokens
+                )
             self._turn_max_prompt = 0
             messages_in = len(history)
 
@@ -718,8 +810,9 @@ class RLM:
 
             # One tool message per call, in call order, each answering its tool_call_id.
             for k, call in enumerate(calls):
-                msg = {"role": "tool", "tool_call_id": call.id, "content": outputs[k]}
-                self._append(history, kinds, msg, "repl")
+                msg = {"role": "tool", "tool_call_id": call.id}
+                pieces = [_Piece(outputs[k], shrinkable=True)]
+                self._append_pieces(history, kinds, msg, pieces, "repl")
 
             if codes:
                 code_hash = hashlib.sha256(
@@ -741,10 +834,10 @@ class RLM:
             for note in notes:
                 self.printer.note(note)
 
-            parts: list[str] = []
+            parts: list[str | tuple[str, str]] = []
             for k, res in enumerate(fenced_results, 1):
                 header = f"[block {k} output]" if len(fenced_results) > 1 else "[output]"
-                parts.append(f"{header}\n{res.output or '(no output)'}")
+                parts.append((header, res.output or "(no output)"))
             if fenced_results:
                 parts.append(fence_slip_note())
             parts.extend(notes)
@@ -752,7 +845,7 @@ class RLM:
                 parts.append(turn_prompt(i + 1, n, protocol="tools"))
             if parts:
                 kind = "repl" if fenced_results else "note"
-                self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, kind)
+                self._append_pieces(history, kinds, {"role": "user"}, _join_parts(parts), kind)
             log(decision)
 
         return self._forced_finish(history, repl, answer_state, iterations, started)
@@ -776,20 +869,19 @@ class RLM:
         note = f"[{not_run} later block(s) not run: {why}]" if not_run > 0 else ""
         if self.cfg.planner_style == "upstream-rlm-v0" and self.cfg.protocol == "fence":
             for block, res in zip(blocks, results, strict=False):
-                msg = upstream_code_output(block, res, self.cfg.output_truncate_chars)
-                self._append(history, kinds, {"role": "user", "content": msg}, "repl")
+                pieces = _upstream_pieces(block, res, self.cfg.output_truncate_chars)
+                self._append_pieces(history, kinds, {"role": "user"}, pieces, "repl")
             if note:
                 self._append(history, kinds, {"role": "user", "content": note}, "note")
             return
-        parts = [
-            f"{f'[block {k} output]' if len(blocks) > 1 else '[output]'}\n"
-            f"{res.output or '(no output)'}"
+        parts: list[str | tuple[str, str]] = [
+            (f"[block {k} output]" if len(blocks) > 1 else "[output]", res.output or "(no output)")
             for k, res in enumerate(results, 1)
         ]
         if note:
             parts.append(note)
         if parts:
-            self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, "repl")
+            self._append_pieces(history, kinds, {"role": "user"}, _join_parts(parts), "repl")
 
     def _flush_tool_outputs(
         self,
@@ -803,9 +895,9 @@ class RLM:
     ) -> None:
         """Tools protocol: one tool reply per call (a call that never ran says so)."""
         for k, call in enumerate(calls):
-            text = outputs.get(k, f"Not run: {why}.")
-            msg = {"role": "tool", "tool_call_id": call.id, "content": text}
-            self._append(history, kinds, msg, "repl")
+            pieces = [_Piece(outputs.get(k, f"Not run: {why}."), shrinkable=True)]
+            msg = {"role": "tool", "tool_call_id": call.id}
+            self._append_pieces(history, kinds, msg, pieces, "repl")
         if fenced:
             self._flush_outputs(history, kinds, fenced, fenced_results, why)
 
@@ -858,6 +950,19 @@ class RLM:
         history.append(msg)
         kinds.append(kind)
         self._full_history.append(msg)
+
+    def _append_pieces(
+        self,
+        history: list[dict[str, Any]],
+        kinds: list[str],
+        msg: dict[str, Any],
+        pieces: list[_Piece],
+        kind: str,
+    ) -> None:
+        """Append ``msg`` with its content built from ``pieces``, which compaction may
+        later shrink (issue #49)."""
+        self._pieces[len(history)] = pieces
+        self._append(history, kinds, {**msg, "content": "".join(p.text for p in pieces)}, kind)
 
     def _root_call(
         self, history: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None
@@ -1055,12 +1160,12 @@ class RLM:
         if self.cfg.planner_style == "upstream-rlm-v0":
             # That style never stores the query (it rides in the per-turn prompt).
             prompt = f'The original prompt: "{self._query}".\n\n{prompt}'
-        if history and history[-1]["role"] == "user":
-            history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
-        else:
-            self._append(history, kinds=[], msg={"role": "user", "content": prompt}, kind="repl")
         tools = tool_specs(self.cfg.output_truncate_chars) if tools_mode else None
-        completion = self._forced_call(history, tools, why)
+        messages = self._forced_messages(history, prompt, tools)
+        if messages is None:
+            completion = Completion("", None, None, "context_overflow", 0.0)
+        else:
+            completion = self._forced_call(messages, tools, why)
         content = completion.content
 
         candidates: list[FinalCandidate] = []
@@ -1111,6 +1216,54 @@ class RLM:
             **detail,
         )
         return self._finish(answer, stop, iterations, started)
+
+    def _forced_messages(
+        self,
+        history: list[dict[str, Any]],
+        prompt: str,
+        tools: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        """The forced finish's request, made to fit the window (issue #49).
+
+        Normally the history with ``prompt`` added to its last user message, as before.
+        If that would not fit, REPL outputs are shrunk first; failing that, the request
+        is cut to the opening messages (system prompt, query or context metadata) plus
+        ``prompt``, which shows the REPL state. Returns None when even that cannot fit,
+        and the forced finish then falls back to the REPL values without a model call.
+        """
+        extra = (estimate_tokens(json.dumps(tools)) if tools else 0) + estimate_tokens(prompt)
+        extra += MESSAGE_OVERHEAD_TOKENS
+        budget = self._input_budget()
+        kinds = self._kinds if len(self._kinds) == len(history) else []
+        if request_tokens(history, extra) > budget and kinds:
+            if self._shrink_outputs(history, kinds, budget - extra):
+                self._push_history_safe()
+        if request_tokens(history, extra) <= budget or not kinds:
+            if history and history[-1]["role"] == "user":
+                history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
+            else:
+                msg = {"role": "user", "content": prompt}
+                self._append(history, kinds=[], msg=msg, kind="repl")
+            return history
+        opening = [dict(m) for m, k in zip(history, kinds, strict=True) if k in OPENING_KINDS]
+        if opening and opening[-1]["role"] == "user":
+            opening[-1]["content"] = f"{opening[-1]['content']}\n\n{prompt}"
+        else:
+            opening.append({"role": "user", "content": prompt})
+        size = request_tokens(opening, extra - estimate_tokens(prompt))
+        fits = size <= budget
+        self.logger.event(
+            "context_overflow",
+            depth=self.depth,
+            during="forced_finish",
+            history_tokens=request_tokens(history, extra),
+            reduced_tokens=size,
+            budget_tokens=budget,
+            context_tokens=self.cfg.context_tokens,
+            max_tokens=self.cfg.root.max_tokens,
+            action="opening_messages_only" if fits else "no_model_call",
+        )
+        return opening if fits else None
 
     def _forced_timeout(self) -> float:
         """Issue #51: a forced finish may run FORCED_FINISH_TIMEOUT past the deadline."""
@@ -1263,22 +1416,114 @@ class RLM:
 
     # --- compaction (epic #8 decision 8)----------------------------------
 
+    def _input_budget(self) -> int:
+        """Prompt tokens a root request may use (issue #49): the window minus the root
+        reply's ``max_tokens`` minus a margin for estimate error."""
+        ctx = self.cfg.context_tokens
+        budget = ctx - self.cfg.root.max_tokens - FIT_MARGIN * ctx
+        return int(max(budget, MIN_BUDGET_FRACTION * ctx))
+
+    def _context_overflow(
+        self,
+        history: list[dict[str, Any]],
+        repl: REPL,
+        answer_state: dict[str, Any] | None,
+        iterations: int,
+        started: float,
+        extra: int,
+    ) -> RLMResult:
+        """Issue #49 last resort: the next request cannot be made to fit, so do not send
+        it (the server would answer 400); log the sizes and take the forced finish."""
+        size, budget = request_tokens(history, extra), self._input_budget()
+        self.logger.event(
+            "context_overflow",
+            depth=self.depth,
+            during="turn",
+            turn=iterations + 1,
+            request_tokens=size,
+            budget_tokens=budget,
+            context_tokens=self.cfg.context_tokens,
+            max_tokens=self.cfg.root.max_tokens,
+        )
+        self.printer.note(
+            f"the next request (~{size} est. tokens) cannot fit the input budget of {budget} "
+            f"(context_tokens={self.cfg.context_tokens} - max_tokens="
+            f"{self.cfg.root.max_tokens} - margin) even after compaction; forcing a final answer"
+        )
+        return self._forced_finish(history, repl, answer_state, iterations, started, why="context")
+
+    def _shrink_outputs(
+        self, history: list[dict[str, Any]], kinds: list[str], target: int
+    ) -> list[int]:
+        """Shrink intact REPL outputs, largest first (ties: oldest), until the history
+        fits ``target`` tokens (issue #49). Each shrunk output keeps its head and tail
+        around a stub pointing at the full text in the REPL's ``history``. Returns the
+        history indexes changed; the history may still not fit."""
+        changed: set[int] = set()
+        stub_tokens = estimate_tokens(FIT_STUB.format(cut=10**6, total=10**6))
+        while True:
+            excess = request_tokens(history) - target
+            if excess <= 0:
+                break
+            best: tuple[tuple[int, int], int, _Piece] | None = None
+            for idx, pieces in self._pieces.items():
+                if idx >= len(kinds) or kinds[idx] != "repl":
+                    continue
+                for piece in pieces:
+                    if not piece.shrinkable:
+                        continue
+                    key = (estimate_tokens(piece.text), -idx)
+                    if best is None or key > best[0]:
+                        best = (key, idx, piece)
+            if best is None:
+                break
+            (tokens, _), idx, piece = best
+            current = len(piece.orig) if piece.kept < 0 else piece.kept
+            want = tokens - excess - stub_tokens
+            keep = int(current * want / tokens) if want > 0 and tokens else 0
+            if keep < MIN_KEPT_CHARS or keep >= current:
+                keep = 0
+            if keep == 0 and estimate_tokens(piece.orig) <= stub_tokens:
+                piece.shrinkable = False  # already smaller than a stub: leave it
+                continue
+            piece.text = _clip_middle(piece.orig, keep)
+            piece.kept = keep
+            if keep == 0:
+                piece.shrinkable = False
+            history[idx] = {**history[idx], "content": "".join(p.text for p in self._pieces[idx])}
+            changed.add(idx)
+        return sorted(changed)
+
+    def _push_history_safe(self) -> None:
+        if self._repl is not None:
+            self._push_history(self._repl)
+
     def _maybe_compact(
-        self, history: list[dict[str, Any]], kinds: list[str], repl: REPL, turn: int
-    ) -> None:
+        self,
+        history: list[dict[str, Any]],
+        kinds: list[str],
+        repl: REPL,
+        turn: int,
+        extra: int = 0,
+    ) -> bool:
+        """Make the next root request fit the input budget (issue #49).
+
+        ``extra`` counts what the request carries besides ``history`` (the upstream
+        per-turn prompt, the tool specs). Step 1, as before: stub REPL outputs older than
+        the last KEEP_RECENT_TURNS and, if still over, summarize them with one sub-call.
+        Step 2: shrink the remaining REPL outputs, largest first, which handles a single
+        turn whose outputs alone overflow the window. Returns False when the request
+        still cannot fit; the caller then takes the forced finish instead of sending it.
+        """
         cfg = self.cfg
-        limit = 0.85 * cfg.context_tokens
+        budget = self._input_budget()
 
-        def size(m: dict[str, Any]) -> int:
-            calls = m.get("tool_calls")
-            return len(m["content"] or "") + (len(json.dumps(calls)) if calls else 0)
-
-        def estimate() -> float:
-            return sum(size(m) for m in history) / CHARS_PER_TOKEN
+        def estimate() -> int:
+            return request_tokens(history, extra)
 
         before = estimate()
-        if before <= limit:
-            return
+        if before <= budget:
+            return True
 
         repl_positions = [idx for idx, k in enumerate(kinds) if k in ("repl", "repl_stub")]
         old = repl_positions[:-KEEP_RECENT_TURNS] if len(repl_positions) > KEEP_RECENT_TURNS else []
@@ -1295,12 +1540,11 @@ class RLM:
                 "content": f"[REPL output from turn {turn_no} elided; {len(original)} chars]",
             }
             kinds[idx] = "repl_stub"
-        if not elided:
-            return  # nothing old enough to drop; the model keeps its recent turns
+            self._pieces.pop(idx, None)
 
         summarized = False
         summary_served: dict[str, Any] = {}
-        if estimate() > limit and not self._past_deadline():
+        if elided and estimate() > budget and not self._past_deadline():
             body = "\n\n".join(f"--- turn {t} ---\n{text}" for t, text in elided)
             prompt = (
                 "Below are outputs from earlier steps of a data-analysis session. Summarize "
@@ -1330,6 +1574,9 @@ class RLM:
             }
             summarized = True
 
+        shrunk = self._shrink_outputs(history, kinds, budget - extra)
+        if not elided and not shrunk:
+            return False  # nothing left to shrink: the caller takes the forced finish
         self._push_history(repl)
         after = estimate()
         self.logger.compaction(
@@ -1337,18 +1584,28 @@ class RLM:
             turn=turn,
             before_tokens=round(before),
             after_tokens=round(after),
+            budget_tokens=budget,
             elided_turns=[t for t, _ in elided],
             summarized=summarized,
+            shrunk_messages=shrunk,
             **{f"summary_{k}": v for k, v in summary_served.items()},
         )
         self.printer.note(
-            f"compacted history: {round(before)} -> {round(after)} est. tokens; "
-            f"full history is in the REPL as `history`"
+            f"compacted history: {round(before)} -> {round(after)} est. tokens "
+            f"(budget {budget}); full history is in the REPL as `history`"
         )
+        return after <= budget
 
     def _push_history(self, repl: REPL) -> None:
         literal = json.dumps(json.dumps(self._full_history, ensure_ascii=True))
         repl.execute(f"import json as _json\nhistory = _json.loads({literal})")
 
 
-__all__ = ["RLM", "RLMResult", "RunBudget", "describe_context"]
+__all__ = [
+    "RLM",
+    "RLMResult",
+    "RunBudget",
+    "describe_context",
+    "estimate_tokens",
+    "request_tokens",
+]
