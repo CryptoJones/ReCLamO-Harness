@@ -199,32 +199,71 @@ def test_plain_truncated_mode_calls_with_a_cut_context() -> None:
     cfg.context_tokens = 2000
     cfg.root.max_tokens = 100
     inst = bench.build_instance("needle", 500, 2)  # needle near the end: cut away
-    lm = MockLM(root=["I cannot find it", "Not in the document"])
+    lm = MockLM(root=["I cannot find it"])
     row = bench.run_row(cfg, lm, "needle", 500, "plain_truncated", 2, None)
     assert row["mode"] == "plain_truncated" and 0 < row["kept_fraction"] < 1
     sent = lm.root_calls[0]["messages"][-1]["content"]
     assert inst.truth not in sent and sent.startswith("=== DOCUMENT ===\nrecord 0:")
     assert row["score"] == 0.0 and row["correct"] is False and row["turns"] == 1
-    assert row["chosen"] == "thinking" and set(row["variants"]) == {"thinking", "nothink"}
+    assert len(lm.root_calls) == 1 and "variants" not in row and "chosen" not in row
 
 
 # --- rows through the library API (MockLM, real subprocess REPL) ----------------------
 
 
-def test_run_row_plain_scores_oolong() -> None:
+def test_run_row_plain_scores_oolong_with_one_attempt() -> None:
     cfg = make_config("http://x")
     inst = bench.build_instance("oolong_lite", 20, 0)
     perfect = "\n".join(f"{cat}: {n}" for cat, n in inst.truth.items())
     off_by_two = perfect.replace(f": {inst.truth['billing']}", f": {inst.truth['billing'] + 2}", 1)
-    lm = MockLM(root=[off_by_two, perfect])  # thinking variant first, then thinking off
+    # A better second answer is available, but plain gets one attempt: it is never asked.
+    lm = MockLM(root=[off_by_two, perfect])
     row = bench.run_row(cfg, lm, "oolong_lite", 20, "plain", 0, None)
-    assert row["fits"] and row["score"] == 0.0 and row["correct"] is True
-    assert row["chosen"] == "nothink" and row["variants"]["thinking"]["score"] == 2.0
+    assert row["fits"] and row["score"] == 2.0 and row["correct"] is False
+    assert "variants" not in row and "chosen" not in row and "seconds_both" not in row
     assert row["stop_reason"] == "stop" and row["tokens"] == 15 and row["subcalls"] == 0
-    assert row["seconds_both"] == 0.0
     sent = lm.root_calls[0]["messages"]
     assert sent[0]["role"] == "system" and "Ticket 1: " in sent[1]["content"]
-    assert [c["enable_thinking"] for c in lm.root_calls] == [True, False]
+    assert len(lm.root_calls) == 1
+
+
+@pytest.mark.parametrize("root_thinking", [True, False])
+def test_plain_follows_the_root_role_thinking(root_thinking: bool) -> None:
+    cfg = make_config("http://x")
+    cfg.root.enable_thinking = root_thinking
+    inst = bench.build_instance("needle", 20, 0)
+    lm = MockLM(root=[f"The passphrase is {inst.truth}"])
+    row = bench.run_row(cfg, lm, "needle", 20, "plain", 0, None)
+    assert [c["enable_thinking"] for c in lm.root_calls] == [root_thinking]
+    assert row["enable_thinking"] is root_thinking and row["score"] == 1.0
+
+
+@pytest.mark.parametrize(
+    "mode, thinking", [("plain-think", True), ("plain-nothink", False)]
+)  # fmt: skip
+@pytest.mark.parametrize("root_thinking", [True, False])
+def test_named_plain_modes_force_thinking_with_one_call(
+    mode: str, thinking: bool, root_thinking: bool
+) -> None:
+    cfg = make_config("http://x")
+    cfg.root.enable_thinking = root_thinking
+    lm = MockLM(root=["no idea", "still none"])
+    row = bench.run_row(cfg, lm, "needle", 20, mode, 0, None)
+    assert [c["enable_thinking"] for c in lm.root_calls] == [thinking]
+    assert row["mode"] == mode and row["enable_thinking"] is thinking
+    assert row["score"] == 0.0 and "variants" not in row
+
+
+def test_plain_modes_are_separate_rows_and_summary_lines() -> None:
+    rows = [
+        _row("needle", 5, "plain", 0, score=1.0),
+        _row("needle", 5, "plain-think", 0, score=1.0),
+        _row("needle", 5, "plain-nothink", 0, score=0.0, correct=False),
+    ]
+    assert len({bench.row_key(r) for r in rows}) == 3
+    cells = bench.summarize(rows)
+    assert [c.mode for c in cells] == ["plain", "plain-think", "plain-nothink"]
+    assert [c.exact for c in cells] == [1, 1, 0]
 
 
 def test_run_row_rlm_needle_with_scripted_model(tmp_path: Path) -> None:
@@ -500,7 +539,7 @@ def test_plain_output_budget_is_generous_but_fits_beside_the_prompt() -> None:
     assert bench.plain_output_tokens(cfg, 30_000, 16_384) == 4_096  # never below the root cap
 
 
-def test_plain_passes_the_output_budget_and_keeps_both_variants() -> None:
+def test_plain_passes_the_output_budget_and_makes_one_call() -> None:
     from reclamo.client import Completion, Usage
 
     cfg = make_config("http://x")
@@ -516,48 +555,89 @@ def test_plain_passes_the_output_budget_and_keeps_both_variants() -> None:
     lm = MockLM(root=[starved, f"The passphrase is {inst.truth}"])
     row = bench.run_row(cfg, lm, "needle", 20, "plain", 0, None, plain_max_tokens=16_384)
     assert row["plain_max_tokens"] == 16_384
-    assert row["chosen"] == "nothink" and row["score"] == 1.0 and row["stop_reason"] == "stop"
-    thinking = row["variants"]["thinking"]
-    assert thinking["stop_reason"] == "length" and thinking["content_from_reasoning"]
-    assert thinking["score"] == 0.0 and thinking["tokens"] == 4196
-    assert row["seconds"] == 0.0 and row["seconds_both"] == 5.0
-    assert [c["enable_thinking"] for c in lm.root_calls] == [True, False]
+    # The cut-off thinking answer is the row's answer: no second try picks a better one.
+    assert row["stop_reason"] == "length" and row["content_from_reasoning"]
+    assert row["score"] == 0.0 and row["tokens"] == 4196 and row["seconds"] == 5.0
+    assert [c["enable_thinking"] for c in lm.root_calls] == [True]
 
 
-def test_better_variant_rules() -> None:
+def test_legacy_best_of_two_rule_reproduces_old_rows() -> None:
     tie = {"thinking": {"score": 1.0, "seconds": 150.0}, "nothink": {"score": 1.0, "seconds": 9.0}}
-    assert bench.better_variant("accuracy", tie) == "nothink"  # tie on score -> faster
+    assert bench._legacy_best_of_two("accuracy", tie) == "nothink"  # tie on score -> faster
     tie["nothink"]["seconds"] = 150.0
-    assert bench.better_variant("accuracy", tie) == "thinking"  # full tie -> thinking
+    assert bench._legacy_best_of_two("accuracy", tie) == "thinking"  # full tie -> thinking
     assert (
-        bench.better_variant("accuracy", {"thinking": {"score": 0.0}, "nothink": {"score": 0.5}})
+        bench._legacy_best_of_two(
+            "accuracy", {"thinking": {"score": 0.0}, "nothink": {"score": 0.5}}
+        )
         == "nothink"
     )
     assert (
-        bench.better_variant("abs_error", {"thinking": {"score": 4.0}, "nothink": {"score": 1.0}})
+        bench._legacy_best_of_two(
+            "abs_error", {"thinking": {"score": 4.0}, "nothink": {"score": 1.0}}
+        )
         == "nothink"
     )
     assert (
-        bench.better_variant("abs_error", {"thinking": {"score": None}, "nothink": {"score": 9.0}})
+        bench._legacy_best_of_two(
+            "abs_error", {"thinking": {"score": None}, "nothink": {"score": 9.0}}
+        )
         == "nothink"
     )
     assert (
-        bench.better_variant("abs_error", {"thinking": {"score": 2.0}, "nothink": {"score": None}})
+        bench._legacy_best_of_two(
+            "abs_error", {"thinking": {"score": 2.0}, "nothink": {"score": None}}
+        )
         == "thinking"
     )
 
 
-def test_load_rows_reapplies_the_choice_rule(tmp_path: Path) -> None:
+def _legacy_row(thinking_score: float, nothink_score: float) -> dict[str, Any]:
     row = _row("needle", 5, "plain", 0, chosen="thinking", seconds=150.0)
     row["variants"] = {
-        "thinking": {"score": 1.0, "correct": True, "seconds": 150.0, "stop_reason": "stop"},
-        "nothink": {"score": 1.0, "correct": True, "seconds": 9.0, "stop_reason": "stop"},
-    }
+        "thinking": {"score": thinking_score, "correct": thinking_score == 1.0,
+                     "seconds": 150.0, "stop_reason": "stop"},
+        "nothink": {"score": nothink_score, "correct": nothink_score == 1.0,
+                    "seconds": 9.0, "stop_reason": "stop"},
+    }  # fmt: skip
+    return row
+
+
+def test_load_rows_reproduces_old_best_of_two_rows_by_default(tmp_path: Path) -> None:
     out = tmp_path / "b.json"
-    bench.write_rows(out, {}, [row, _row("needle", 5, "rlm", 0)])
+    bench.write_rows(out, {}, [_legacy_row(1.0, 1.0), _row("needle", 5, "rlm", 0)])
     _meta, rows = bench.load_rows(out)
     assert rows[0]["chosen"] == "nothink" and rows[0]["seconds"] == 9.0
     assert rows[0]["seconds_both"] == 159.0 and "variants" not in rows[1]
+    assert rows[0]["legacy_plain"] == "best-of-2"
+    assert "best-of-2" in bench.legacy_note(rows) and "--legacy-plain" in bench.legacy_note(rows)
+    assert bench.legacy_note(rows[1:]) == ""
+
+
+@pytest.mark.parametrize("variant, score", [("thinking", 0.0), ("nothink", 1.0)])
+def test_load_rows_resummarises_old_rows_as_one_variant(
+    tmp_path: Path, variant: str, score: float
+) -> None:
+    out = tmp_path / "b.json"
+    bench.write_rows(out, {}, [_legacy_row(0.0, 1.0)])
+    _meta, rows = bench.load_rows(out, variant)
+    assert rows[0]["chosen"] == variant and rows[0]["score"] == score
+    assert "single" in bench.legacy_note(rows)
+
+
+def test_summary_only_on_an_old_file(tmp_path: Path) -> None:
+    out = tmp_path / "old.json"
+    bench.write_rows(out, {}, [_legacy_row(0.0, 1.0)])
+    best = _cli("--summary-only", str(out))
+    assert best.returncode == 0 and "1/1 found" in best.stdout and "predate" in best.stdout
+    single = _cli("--summary-only", str(out), "--legacy-plain", "thinking")
+    assert single.returncode == 0 and "0/1 found" in single.stdout
+
+
+def test_resume_refuses_old_best_of_two_plain_rows() -> None:
+    rows = [_legacy_row(1.0, 1.0), _row("needle", 5, "rlm", 0)]
+    assert bench.legacy_resume_conflict(rows, ["rlm", "plain"]) == ["plain"]
+    assert bench.legacy_resume_conflict(rows, ["rlm", "plain-nothink"]) == []
 
 
 # --- protocol (issue #20) -------------------------------------------------------------

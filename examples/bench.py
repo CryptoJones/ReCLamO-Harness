@@ -14,11 +14,21 @@ this file adds the grid, the modes and the bookkeeping:
   only when the prompt fits the model's usable window (``context_tokens`` minus
   the root output reserve; one token per digit, else ``CHARS_PER_TOKEN`` chars
   per token); otherwise
-  the row records ``does not fit`` and no call. Each plain row makes two calls,
-  thinking on (with a generous output budget, capped by what fits beside the
-  prompt) and thinking off, keeps both, and reports the better one.
-- ``plain_truncated`` (opt-in): the same call with the context cut to fit,
+  the row records ``does not fit`` and no call. Each plain row is **one call**
+  with thinking set as the profile's root role sets it (``root.enable_thinking``),
+  so plain and the harness's root run the same model configuration. The output
+  budget is generous, capped by what fits beside the prompt.
+- ``plain-think`` / ``plain-nothink`` (opt-in): the same single call with thinking
+  forced on / off. Each is its own row and its own summary line; nothing picks
+  between them.
+- ``plain_truncated`` (opt-in): the plain call with the context cut to fit,
   clearly labelled; it shows what a window-limited model gets.
+
+No plain mode looks at the answer key before it is scored (issue #57). Rows written
+before that change hold two plain variants (``variants``) and the better of the two
+chosen against the truth (``chosen``); they still load, and by default summarise as
+recorded (best-of-2) with a note under the table. ``--legacy-plain thinking`` or
+``--legacy-plain nothink`` re-summarises them as that single variant.
 
 ``--protocol tools`` runs the ``rlm`` mode over execute_python / final_answer tool
 calls instead of fenced code (issue #20). Each rlm row records its ``protocol`` and
@@ -60,9 +70,19 @@ from reclamo.errors import RLMError  # noqa: E402
 from reclamo.logger import TrajectoryLogger  # noqa: E402
 from reclamo.rlm import CHARS_PER_TOKEN, RLM  # noqa: E402
 
-MODES = ("rlm", "plain", "plain_truncated")
+MODES = ("rlm", "plain", "plain-think", "plain-nothink", "plain_truncated")
 # Summary order; "rlm:tools" is the rlm mode run with protocol="tools".
-MODE_LABELS = ("rlm", "rlm:tools", "plain", "plain_truncated")
+MODE_LABELS = ("rlm", "rlm:tools", "plain", "plain-think", "plain-nothink", "plain_truncated")
+# Thinking per plain mode; None = as the profile's root role sets it.
+PLAIN_THINKING: dict[str, bool | None] = {
+    "plain": None,
+    "plain-think": True,
+    "plain-nothink": False,
+    "plain_truncated": None,
+}
+# How rows written before issue #57 (two variants, the better chosen on the truth)
+# are summarised: as recorded, or as one of the two single variants.
+LEGACY_PLAIN = ("best-of-2", "thinking", "nothink")
 DEFAULT_MODES = ("rlm", "plain")
 DEFAULT_GRID: tuple[tuple[str, int], ...] = (
     ("oolong_lite", 100),
@@ -85,6 +105,10 @@ PLAIN_SYSTEM = (
     "markers and then a question about it. Answer from the document only."
 )
 RowRunner = Callable[[str, int, str, int], dict[str, Any]]
+PLAIN_RULE = (
+    "one call per plain row, no selection: plain = thinking as the root role sets it; "
+    "plain-think / plain-nothink force it on / off"
+)
 
 
 @dataclass
@@ -291,10 +315,11 @@ def plain_output_tokens(cfg: RLMConfig, est_prompt_tokens: int, plain_max_tokens
     return max(cfg.root.max_tokens, min(plain_max_tokens, beside))
 
 
-def _plain_variant(
+def _plain_call(
     client: Any, messages: list[dict[str, str]], spec: TaskSpec, truth: Any, *,
     enable_thinking: bool, max_tokens: int,
 ) -> dict[str, Any]:  # fmt: skip
+    """One plain call, scored after the fact. The truth is used only to score."""
     started = time.monotonic()
     try:
         c = client.complete(
@@ -328,8 +353,10 @@ def _plain_variant(
     }
 
 
-def better_variant(metric: str, variants: dict[str, dict[str, Any]]) -> str:
-    """Name of the better-scoring variant; a tie on score goes to the faster one."""
+def _legacy_best_of_two(metric: str, variants: dict[str, dict[str, Any]]) -> str:
+    """The pre-#57 rule, kept only to re-summarise old rows as they were published:
+    the better-scoring variant against the truth, a tie going to the faster one.
+    Nothing new is chosen this way."""
 
     def key(name: str) -> tuple[float, float]:
         score = variants[name].get("score")
@@ -341,16 +368,53 @@ def better_variant(metric: str, variants: dict[str, dict[str, Any]]) -> str:
     return min(variants, key=key)
 
 
-def apply_choice(row: dict[str, Any], metric: str | None = None) -> dict[str, Any]:
-    """Re-derive a plain row's top-level fields from its stored variants (idempotent)."""
+def is_legacy_plain(row: dict[str, Any]) -> bool:
+    """A row written before #57: two plain variants, one chosen on the truth."""
+    return bool(row.get("variants"))
+
+
+def apply_legacy(
+    row: dict[str, Any], metric: str | None = None, legacy: str = "best-of-2"
+) -> dict[str, Any]:
+    """Re-derive an old plain row's top-level fields from its stored variants (idempotent).
+
+    ``legacy`` is ``best-of-2`` (as recorded and published: selected on the truth),
+    ``thinking`` or ``nothink`` (that single variant, as if it had been the only call).
+    Rows without ``variants`` (every row written since #57) are returned unchanged.
+    """
+    if legacy not in LEGACY_PLAIN:
+        raise ValueError(f"legacy must be one of {', '.join(LEGACY_PLAIN)}, not {legacy!r}")
     variants = row.get("variants")
     if not variants:
         return row
-    chosen = better_variant(metric or TASKS[row["task"]].metric, variants)
+    if legacy == "best-of-2":
+        chosen = _legacy_best_of_two(metric or TASKS[row["task"]].metric, variants)
+    else:
+        chosen = legacy
     row.update(variants[chosen])
     row["chosen"] = chosen
+    row["legacy_plain"] = legacy
     row["seconds_both"] = round(sum(v["seconds"] for v in variants.values()), 2)
     return row
+
+
+def legacy_note(rows: Iterable[dict[str, Any]]) -> str:
+    """A line for under the summary when old best-of-2 plain rows were summarised."""
+    rows = [r for r in rows if is_legacy_plain(r)]
+    if not rows:
+        return ""
+    how = {r.get("legacy_plain", "best-of-2") for r in rows}
+    if how == {"best-of-2"}:
+        return (
+            f"Note: {len(rows)} plain row(s) predate issue #57 and are best-of-2 "
+            "(thinking on / off, the better chosen against the answer key), which "
+            "inflates them. Re-summarise with --legacy-plain thinking or "
+            "--legacy-plain nothink for a single-attempt view."
+        )
+    return (
+        f"Note: {len(rows)} plain row(s) predate issue #57; shown as the single "
+        f"{'/'.join(sorted(how))} variant, not the recorded best-of-2."
+    )
 
 
 def run_plain(
@@ -360,15 +424,23 @@ def run_plain(
     *,
     truncated: bool,
     plain_max_tokens: int = PLAIN_MAX_TOKENS,
+    enable_thinking: bool | None = None,
 ) -> dict[str, Any]:
-    """Best of two single calls: thinking on (generous output budget) and thinking off.
+    """One plain call with the whole (or, if ``truncated``, a cut) context.
 
-    Both variants are kept in the row under ``variants``; the top-level fields are
-    the chosen one's, so the summary reports the better of the two.
+    ``enable_thinking`` None means as the profile's root role sets it, so the plain
+    baseline and the harness's root run the same model configuration. One attempt,
+    no selection: the truth is used only to score the answer.
     """
     spec = TASKS[inst.task]
+    thinking = cfg.root.enable_thinking if enable_thinking is None else enable_thinking
     fits, est, budget = fit_decision(cfg, inst.context, inst.query)
-    row: dict[str, Any] = {"fits": fits, "est_prompt_tokens": est, "usable_tokens": budget}
+    row: dict[str, Any] = {
+        "fits": fits,
+        "est_prompt_tokens": est,
+        "usable_tokens": budget,
+        "enable_thinking": thinking,
+    }
     context = inst.context
     if truncated:
         if fits:
@@ -395,16 +467,13 @@ def run_plain(
         return row
     messages = plain_messages(context, inst.query)
     max_tokens = plain_output_tokens(cfg, est, plain_max_tokens)
-    variants = {
-        "thinking": _plain_variant(
-            client, messages, spec, inst.truth, enable_thinking=True, max_tokens=max_tokens
-        ),
-        "nothink": _plain_variant(
-            client, messages, spec, inst.truth, enable_thinking=False, max_tokens=max_tokens
-        ),
-    }
-    row.update(turns=1, subcalls=0, trajectory=None, plain_max_tokens=max_tokens, variants=variants)
-    return apply_choice(row, spec.metric)
+    row.update(turns=1, subcalls=0, trajectory=None, plain_max_tokens=max_tokens)
+    row.update(
+        _plain_call(
+            client, messages, spec, inst.truth, enable_thinking=thinking, max_tokens=max_tokens
+        )
+    )
+    return row
 
 
 def run_row(
@@ -432,10 +501,17 @@ def run_row(
     if mode == "rlm":
         row["protocol"] = cfg.protocol
         row.update(run_rlm(cfg, client, inst, log_dir))
-    elif mode == "plain":
-        row.update(run_plain(cfg, client, inst, truncated=False, plain_max_tokens=plain_max_tokens))
-    elif mode == "plain_truncated":
-        row.update(run_plain(cfg, client, inst, truncated=True, plain_max_tokens=plain_max_tokens))
+    elif mode in PLAIN_THINKING:
+        row.update(
+            run_plain(
+                cfg,
+                client,
+                inst,
+                truncated=mode == "plain_truncated",
+                plain_max_tokens=plain_max_tokens,
+                enable_thinking=PLAIN_THINKING[mode],
+            )
+        )
     else:
         raise ValueError(f"unknown mode {mode!r}; expected one of {', '.join(MODES)}")
     return row
@@ -482,10 +558,17 @@ def row_key(row: dict[str, Any]) -> tuple[str, int, str, int]:
     return (row["task"], int(row["size"]), label, int(row["seed"]))
 
 
-def load_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def load_rows(path: Path, legacy: str = "best-of-2") -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Rows from a JSON file; old best-of-2 plain rows are summarised per ``legacy``."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    rows = [apply_choice(row) for row in data.get("rows", [])]
+    rows = [apply_legacy(row, legacy=legacy) for row in data.get("rows", [])]
     return data.get("meta", {}), rows
+
+
+def legacy_resume_conflict(rows: Iterable[dict[str, Any]], modes: Iterable[str]) -> list[str]:
+    """Plain modes a resume would wrongly skip: old best-of-2 rows hold their keys."""
+    modes = set(modes)
+    return sorted({r["mode"] for r in rows if is_legacy_plain(r) and r["mode"] in modes})
 
 
 def write_rows(path: Path, meta: dict[str, Any], rows: list[dict[str, Any]]) -> None:
@@ -686,7 +769,7 @@ def format_dry_run(cfg: RLMConfig, cells: Iterable[tuple[str, int, str, int]]) -
             seen[(task, size)] = (len(inst.context), fits, est)
         chars, fits, est = seen[(task, size)]
         verdict = ""
-        if mode == "plain":
+        if mode in ("plain", "plain-think", "plain-nothink"):
             verdict = "fits" if fits else "does not fit"
         elif mode == "plain_truncated":
             verdict = "no truncation needed" if fits else "truncated"
@@ -726,6 +809,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--summary-only", default=None, metavar="FILE", help="summarise an existing JSON; no runs"
     )
+    parser.add_argument(
+        "--legacy-plain",
+        choices=LEGACY_PLAIN,
+        default="best-of-2",
+        help="how plain rows written before issue #57 (best of thinking on/off, chosen on "
+        "the truth) are summarised: as recorded (default) or as one single variant",
+    )
     parser.add_argument("--log-dir", default="runs", help="trajectory directory (default runs/)")
     parser.add_argument(
         "--max-timeout", type=float, default=600.0, help="seconds per RLM run (default 600)"
@@ -757,8 +847,11 @@ def main(argv: list[str] | None = None) -> int:
     err = sys.stderr
 
     if args.summary_only:
-        _meta, rows = load_rows(Path(args.summary_only))
+        _meta, rows = load_rows(Path(args.summary_only), args.legacy_plain)
         print(format_summary(summarize(rows)))
+        note = legacy_note(rows)
+        if note:
+            print(f"\n{note}")
         return 0
 
     try:
@@ -798,7 +891,16 @@ def main(argv: list[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     meta: dict[str, Any] = {}
     if args.resume:
-        meta, rows = load_rows(Path(args.resume))
+        meta, rows = load_rows(Path(args.resume), args.legacy_plain)
+        conflict = legacy_resume_conflict(rows, modes)
+        if conflict:
+            print(
+                f"bench: {args.resume} holds best-of-2 {', '.join(conflict)} rows from before "
+                "issue #57; resuming would skip those cells. Write the new rows to a new "
+                "file, or drop those modes.",
+                file=err,
+            )
+            return 2
     out = Path(args.out or args.resume or Path(args.log_dir) / f"bench-{stamp}.json")
     meta = {
         **meta,
@@ -811,7 +913,8 @@ def main(argv: list[str] | None = None) -> int:
         "token_estimate": "one token per digit, else chars/3.5",
         "root_max_tokens": cfg.root.max_tokens,
         "plain_max_tokens": args.plain_max_tokens,
-        "plain_rule": "best of thinking-on and thinking-off single calls",
+        "plain_rule": PLAIN_RULE,
+        "root_enable_thinking": cfg.root.enable_thinking,
         "max_timeout": cfg.max_timeout,
         "subcall_chars": cfg.subcall_chars,
         "max_depth": cfg.max_depth,
@@ -848,6 +951,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"bench: interrupted; {len(rows)} rows saved in {out}", file=err)
         return 130
     summary = format_summary(summarize(rows))
+    note = legacy_note(rows)
+    if note:
+        summary += f"\n\n{note}"
     summary_path = out.with_suffix(".md")
     summary_path.write_text(summary + "\n", encoding="utf-8")
     print(summary)
