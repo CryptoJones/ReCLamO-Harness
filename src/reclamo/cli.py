@@ -63,6 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--log-dir", default="runs", help="trajectory JSONL directory (default runs/)")
     run.add_argument("--verbose", action="store_true", help="print each turn to stderr")
     run.add_argument("--no-thinking", action="store_true", help="disable thinking on root turns")
+    run.add_argument(
+        "--sub-thinking",
+        action="store_true",
+        help="enable thinking on sub-calls (llm_query); the profile's sub.enable_thinking "
+        "is the persistent switch",
+    )
     run.add_argument("--json", action="store_true", help="print the result as JSON")
     run.add_argument("--sft", action="store_true", help="also write <run>.sft.jsonl")
     run.add_argument(
@@ -199,6 +205,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         return loaded
     cfg, client = loaded
 
+    if args.prompt_version:  # first: its defaults apply, then the explicit flags below
+        cfg = dataclasses.replace(cfg, prompt_version=args.prompt_version)
+        client.cfg = cfg
     overrides: dict[str, Any] = {}
     if args.max_depth is not None:
         overrides["max_depth"] = args.max_depth
@@ -208,14 +217,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides["sft_log"] = True
     if args.no_thinking:
         overrides["root"] = dataclasses.replace(cfg.root, enable_thinking=False)
+    if args.sub_thinking:
+        overrides["sub"] = dataclasses.replace(cfg.sub, enable_thinking=True)
     if args.sandbox:
         overrides["sandbox"] = args.sandbox
     if args.protocol:
         overrides["protocol"] = args.protocol
     if args.planner_style:
         overrides["planner_style"] = args.planner_style
-    if args.prompt_version:
-        overrides["prompt_version"] = args.prompt_version
     if overrides:
         try:
             cfg = dataclasses.replace(cfg, **overrides)

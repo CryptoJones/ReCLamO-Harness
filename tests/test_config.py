@@ -26,20 +26,92 @@ def test_builtin_pluto_profile() -> None:
     assert cfg.base_url == "http://pluto:8083/v1"
     assert cfg.api_key_env == "RECLAMO_API_KEY"
     assert cfg.api_key_cmd == "pass pluto/flashnext-api-key"
-    assert cfg.concurrency == 1
+    assert cfg.concurrency == 2  # Strata "parallel": 2 since 2026-10-08
     assert cfg.context_tokens == 32768
     assert cfg.subcall_chars is None and cfg.prompt_version == "v0.2"
-    # (32,768 - 2,048) tokens * 0.85 * 3 chars/token
-    assert cfg.effective_subcall_chars == 78_336
-    assert (cfg.max_iterations, cfg.max_depth) == (20, 1)
-    assert (cfg.max_subcalls_per_run, cfg.max_subcalls_per_exec) == (64, 24)
-    assert cfg.output_truncate_chars == 2_000
+    # (32,768 - 4,096) tokens * 0.85 * 3 chars/token
+    assert cfg.effective_subcall_chars == 73_113
+    # v0.2 defaults (issue #61)
+    assert (cfg.max_iterations, cfg.max_depth) == (30, 1)
+    assert (cfg.max_subcalls_per_run, cfg.max_subcalls_per_exec) == (256, 64)
+    assert cfg.output_truncate_chars == 20_000
+    assert cfg.max_timeout == 3_600.0
+    assert (cfg.root.max_tokens, cfg.sub.max_tokens) == (8_192, 4_096)
     assert cfg.root.model == "qwen3.8-flash-next"
     assert cfg.root.enable_thinking is True
     assert cfg.root.sampling == {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "min_p": 0.0}
     assert cfg.sub.enable_thinking is False
     assert cfg.sub.sampling["presence_penalty"] == 1.0
-    assert cfg.sub.max_tokens == 2048
+
+
+def test_prompt_v01_reproduces_the_published_defaults() -> None:
+    import dataclasses
+
+    cfg = load_config("pluto", user_file="/nonexistent/profiles.toml", env=NO_ENV)
+    old = dataclasses.replace(cfg, prompt_version="v0.1")
+    assert (old.max_iterations, old.output_truncate_chars, old.max_timeout) == (20, 2_000, 1_800.0)
+    assert (old.max_subcalls_per_run, old.max_subcalls_per_exec) == (64, 24)
+    assert (old.root.max_tokens, old.sub.max_tokens) == (4_096, 2_048)
+    assert (old.root.timeout, old.sub.timeout) == (300.0, 300.0)
+    assert old.effective_subcall_chars == 12_000
+    # and back again
+    again = dataclasses.replace(old, prompt_version="v0.2")
+    assert (again.max_iterations, again.root.max_tokens) == (30, 8_192)
+
+
+def test_explicit_values_beat_the_version_defaults(tmp_path) -> None:
+    import dataclasses
+
+    user = tmp_path / "p.toml"
+    user.write_text(
+        "[profiles.pluto]\nmax_iterations = 12\n[profiles.pluto.root]\nmax_tokens = 6000\n"
+    )
+    cfg = load_config("pluto", user_file=user, env=NO_ENV)
+    assert (cfg.max_iterations, cfg.root.max_tokens, cfg.output_truncate_chars) == (
+        12,
+        6_000,
+        20_000,
+    )
+    old = dataclasses.replace(cfg, prompt_version="v0.1")
+    assert (old.max_iterations, old.root.max_tokens, old.output_truncate_chars) == (
+        12,
+        6_000,
+        2_000,
+    )
+    # an explicit change made with replace is kept too
+    assert dataclasses.replace(cfg, max_timeout=900.0).max_timeout == 900.0
+
+
+def test_root_max_tokens_follows_thinking() -> None:
+    import dataclasses
+
+    cfg = load_config("pluto", user_file="/nonexistent/profiles.toml", env=NO_ENV)
+    off = dataclasses.replace(cfg, root=dataclasses.replace(cfg.root, enable_thinking=False))
+    assert off.root.max_tokens == 4_096 and cfg.root.max_tokens == 8_192
+    assert "defaults_resolved" not in repr(cfg)
+
+
+def test_defaults_resolved_is_not_a_profile_key(tmp_path) -> None:
+    user = tmp_path / "p.toml"
+    user.write_text("[profiles.pluto]\ndefaults_resolved = {}\n")
+    with pytest.raises(ConfigError, match="unknown field"):
+        load_config("pluto", user_file=user, env=NO_ENV)
+
+
+def test_builtin_pluto_long_profile() -> None:
+    cfg = load_config("pluto-long", user_file="/nonexistent/profiles.toml", env=NO_ENV)
+    pluto = load_config("pluto", user_file="/nonexistent/profiles.toml", env=NO_ENV)
+    assert cfg.context_tokens == 131_072 and cfg.concurrency == 2
+    assert cfg.root.timeout >= 1_800 and cfg.sub.timeout >= 1_800
+    assert (cfg.base_url, cfg.api_key_cmd) == (pluto.base_url, pluto.api_key_cmd)
+    for role in ("root", "sub"):
+        a, b = cfg.role(role), pluto.role(role)
+        assert (a.model, a.sampling, a.enable_thinking, a.max_tokens) == (
+            b.model, b.sampling, b.enable_thinking, b.max_tokens,
+        )  # fmt: skip
+    assert pluto.context_tokens == 32_768  # pluto's window unchanged
+    assert (pluto.root.timeout, pluto.sub.timeout) == (900.0, 900.0)  # v0.2 default
+    assert cfg.max_iterations == pluto.max_iterations == 30
 
 
 def test_builtin_openai_compatible_profile() -> None:

@@ -806,3 +806,53 @@ def test_forced_finish_long_values_are_cut(tmp_path: Path) -> None:
     assert result.answer == "z" * 5000  # the value itself is returned whole
     prompt = lm.root_calls[2]["messages"][-1]["content"]
     assert "- final = " + "z" * 300 + "[... 4700 chars cut]" in prompt
+
+
+# --- issue #61: a reply cut off part-way is continued (prompt v0.2) ----------------
+
+
+def test_reply_cut_mid_code_block_is_continued_and_joined() -> None:
+    from tests.mocklm import completion
+
+    cut = completion("Plan: count lines.\n```repl\nn = len(context.split", finish_reason="length")
+    rest = completion("lines())\nprint(n)\n```")
+    result, lm = _run([cut, rest, "FINAL_VAR(n)"], cfg=_cfg())
+    assert result.answer == "3"
+    asked = lm.root_calls[1]
+    assert asked["enable_thinking"] is False
+    assert asked["messages"][-1]["content"].startswith("Your last message was cut off")
+    assert asked["messages"][-2] == {"role": "assistant", "content": cut.content}
+    third = lm.root_calls[2]["messages"]
+    stored = [m["content"] for m in third if m["role"] == "assistant"]
+    assert stored[0] == cut.content + rest.content  # one joined reply in the history
+    assert "continued once" in third[-1]["content"]
+
+
+def test_cut_off_thinking_is_retried_without_thinking() -> None:
+    from tests.mocklm import completion
+
+    cut = completion("Let me think about the lines", finish_reason="length")
+    cut.content_from_reasoning = True
+    result, lm = _run([cut, "```repl\nprint(3)\n```", "FINAL(3)"], cfg=_cfg())
+    assert result.answer == "3"
+    assert lm.root_calls[1]["enable_thinking"] is False
+    assert lm.root_calls[1]["messages"][-1]["role"] == "user"  # a retry, not a continuation
+    assert "retried without thinking" in lm.root_calls[2]["messages"][-1]["content"]
+
+
+def test_cut_reply_with_a_complete_action_is_kept() -> None:
+    from tests.mocklm import completion
+
+    done = completion("```repl\nprint(3)\n```\nThat should show the count, and then I wi",
+                      finish_reason="length")  # fmt: skip
+    result, lm = _run([done, "FINAL(3)"], cfg=_cfg())
+    assert result.answer == "3" and len(lm.root_calls) == 2
+
+
+def test_prompt_v01_does_not_continue_cut_replies() -> None:
+    from tests.mocklm import completion
+
+    cut = completion("```repl\nprint(len(context", finish_reason="length")
+    result, lm = _run([cut, "FINAL(x)"], cfg=_cfg(prompt_version="v0.1"))
+    assert len(lm.root_calls) == 2
+    assert "continued once" not in lm.root_calls[1]["messages"][-1]["content"]

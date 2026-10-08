@@ -77,7 +77,7 @@ def test_builtin_pluto_is_one_shared_endpoint() -> None:
     (ep,) = cfg.endpoints()
     assert ep.base_url == "http://pluto:8083/v1"
     assert ep.roles == ("root", "sub")
-    assert ep.concurrency == 1
+    assert ep.concurrency == 2  # Strata "parallel": 2 (2026-10-08)
     assert ep.api_key_env == "RECLAMO_API_KEY"
     assert ep.api_key_cmd == "pass pluto/flashnext-api-key"
     assert cfg.endpoint("root") == cfg.endpoint("sub") == ep
@@ -345,7 +345,8 @@ def test_readme_planner_8b_example_parses(tmp_path: Path) -> None:
     assert (root.base_url, cfg.root.model) == ("http://localhost:8080/v1", "qwen3-8b-rlm")
     assert root.api_key_env == "RECLAMO_PLANNER_API_KEY"
     assert (sub.base_url, cfg.sub.model) == ("http://pluto:8083/v1", "qwen3.8-flash-next")
-    assert (sub.api_key_cmd, sub.concurrency) == ("pass pluto/flashnext-api-key", 1)
+    assert (sub.api_key_cmd, sub.concurrency) == ("pass pluto/flashnext-api-key", 2)
+    assert root.concurrency == 1  # the planner's endpoint keeps its own concurrency
     assert "planner-8b" not in BUILTIN_PROFILES_TOML  # documented, not built in
 
 

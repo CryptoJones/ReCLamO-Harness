@@ -52,29 +52,98 @@ V01_SUBCALL_CHARS = 12_000
 SUBCALL_MARGIN = 0.15
 SUBCALL_CHARS_PER_TOKEN = 3.0
 MIN_SUBCALL_CHARS = 4_000
+# Defaults that follow prompt_version (issue #61). A field left unset in the profile
+# takes its version's value; a value set anywhere (profile, user file, code) wins.
+# "v0.1" is exactly what the published results ran with. "v0.2" removes limits we set
+# ourselves: 30 turns (upstream rlm main, rlm/core/rlm.py), 20,000-char REPL output
+# (upstream v1.0.0 parsing.py), sub-call caps the paper's "thousands" never came near,
+# and an hour per run.
+VERSION_DEFAULTS: dict[str, dict[str, Any]] = {
+    "v0.1": {
+        "max_iterations": 20,
+        "output_truncate_chars": 2_000,
+        "max_subcalls_per_run": 64,
+        "max_subcalls_per_exec": 24,
+        "max_timeout": 1_800.0,
+    },
+    "v0.2": {
+        "max_iterations": 30,
+        "output_truncate_chars": 20_000,
+        "max_subcalls_per_run": 256,
+        "max_subcalls_per_exec": 64,
+        "max_timeout": 3_600.0,
+    },
+}
+
+
+# Per-request timeout (seconds) when a role leaves ``timeout`` unset. v0.2 raises it
+# from 300 to 900 s: an 8,192-token thinking reply at ~35 tok/s (Strata, two slots) is
+# ~234 s of decode before any prompt reading, so 300 s cut long root turns short.
+ROLE_TIMEOUT_DEFAULTS = {"v0.1": 300.0, "v0.2": 900.0}
+
+
+def role_max_tokens_default(version: str, role: str, enable_thinking: bool) -> int:
+    """Per-request output cap when the profile leaves ``max_tokens`` unset.
+
+    v0.1: root 4,096, sub 2,048 (the built-in profiles' values when the results were
+    published). v0.2: root 8,192 with thinking on, else 4,096 (paper App. B: thinking
+    models "without sufficient output tokens struggle as RLMs"); sub 4,096.
+    """
+    if version == "v0.1":
+        return 4_096 if role == "root" else 2_048
+    if role == "root":
+        return 8_192 if enable_thinking else 4_096
+    return 4_096
+
 
 # Qwen3 sampling presets from the model card; top_k and min_p are non-standard
 # parameters and travel to the server in the request body's top level via
 # ``extra_body`` (see client.py).
 BUILTIN_PROFILES_TOML = """
+# pluto: Strata serving the Flash-Next model. concurrency = 2 since 2026-10-08, when
+# Strata went to "parallel": 2 (int8 KV, 64K resident); set it back to 1 to undo.
+# max_tokens is left to the prompt_version default (v0.2: root 8,192 with thinking,
+# sub 4,096; v0.1: 4,096 / 2,048). Sub-call thinking is a switch: sub.enable_thinking
+# (off here because Strata is slow; the paper's sub-model, GPT-5-mini, reasons).
 [profiles.pluto]
 base_url = "http://pluto:8083/v1"
 api_key_cmd = "pass pluto/flashnext-api-key"
-concurrency = 1
+concurrency = 2
 context_tokens = 32768
 
 [profiles.pluto.root]
 model = "qwen3.8-flash-next"
-max_tokens = 4096
 enable_thinking = true
 reasoning_effort = "medium"
 sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0 }
 
 [profiles.pluto.sub]
 model = "qwen3.8-flash-next"
-max_tokens = 2048
 enable_thinking = false
 sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
+
+# pluto-long: the same server, model, key and sampling, but Strata's accepted window
+# instead of the 32K that used to stay resident on the GPU. Prompt reading slows past
+# the resident window (~500 -> ~200 tok/s), so requests get 30 minutes. It exists so
+# the plain baseline can run on contexts above 32K (issue #61).
+[profiles.pluto-long]
+base_url = "http://pluto:8083/v1"
+api_key_cmd = "pass pluto/flashnext-api-key"
+concurrency = 2
+context_tokens = 131072
+
+[profiles.pluto-long.root]
+model = "qwen3.8-flash-next"
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0 }
+timeout = 1800.0
+
+[profiles.pluto-long.sub]
+model = "qwen3.8-flash-next"
+enable_thinking = false
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
+timeout = 1800.0
 
 # Any OpenAI-compatible server. Point it somewhere with RECLAMO_BASE_URL and
 # RECLAMO_MODEL; the key comes from RECLAMO_API_KEY.
@@ -85,13 +154,11 @@ context_tokens = 32768
 
 [profiles.openai-compatible.root]
 model = "default"
-max_tokens = 4096
 enable_thinking = false
 sampling = { temperature = 0.6, top_p = 0.95 }
 
 [profiles.openai-compatible.sub]
 model = "default"
-max_tokens = 2048
 enable_thinking = false
 sampling = { temperature = 0.7, top_p = 0.8 }
 """
@@ -110,11 +177,14 @@ class ModelConfig:
     """Per-role model settings. Roles are ``root`` (the RLM loop) and ``sub`` (llm_query)."""
 
     model: str
-    max_tokens: int = 4096
+    # Output cap per request; None = the prompt_version default for this role
+    # (``role_max_tokens_default``), filled in by ``RLMConfig``.
+    max_tokens: int | None = None
     enable_thinking: bool = False
     reasoning_effort: str | None = None
     sampling: dict[str, Any] = field(default_factory=dict)
-    timeout: float = 300.0  # seconds per request
+    # Seconds per request; None = the prompt_version default (ROLE_TIMEOUT_DEFAULTS).
+    timeout: float | None = None
     # Per-role endpoint overrides; None inherits the profile-level value.
     base_url: str | None = None
     api_key_env: str | None = None
@@ -154,12 +224,13 @@ class RLMConfig:
     # model's window under prompt_version "v0.2", 12,000 under "v0.1"; a number is
     # an explicit override either way. Read it through ``effective_subcall_chars``.
     subcall_chars: int | None = None
-    max_iterations: int = 20
+    # The next five default by prompt_version (VERSION_DEFAULTS); None = that default.
+    max_iterations: int | None = None
     max_depth: int = 1
-    max_subcalls_per_run: int = 64
-    max_subcalls_per_exec: int = 24
-    output_truncate_chars: int = 2_000
-    max_timeout: float = 1_800.0  # whole run, seconds
+    max_subcalls_per_run: int | None = None
+    max_subcalls_per_exec: int | None = None
+    output_truncate_chars: int | None = None
+    max_timeout: float | None = None  # whole run, seconds
     exec_timeout: float = 120.0  # one REPL exec, seconds
     subcall_timeout: float = 300.0  # one llm_query/rlm_query, seconds
     max_errors: int = 3  # consecutive REPL errors before giving up
@@ -176,6 +247,9 @@ class RLMConfig:
     prompt_version: str = DEFAULT_PROMPT_VERSION  # reclamo prompt only; see PROMPT_VERSIONS
     root: ModelConfig
     sub: ModelConfig
+    # Which fields were filled from the prompt_version defaults, and with what. Lets
+    # ``dataclasses.replace(cfg, prompt_version=...)`` re-derive them; not a profile key.
+    defaults_resolved: dict[str, Any] = field(default_factory=dict, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.protocol not in PROTOCOLS:
@@ -194,12 +268,46 @@ class RLMConfig:
             )
         if self.subcall_chars is not None and self.subcall_chars < 1:
             raise ConfigError(f"subcall_chars must be positive, not {self.subcall_chars}")
+        self._apply_version_defaults()
         if self.planner_style != "reclamo" and self.protocol != "fence":
             raise ConfigError(
                 f"planner_style {self.planner_style!r} speaks fenced ```repl code and "
                 f'FINAL text; it needs protocol = "fence", not {self.protocol!r}'
             )
         self.endpoints()  # validates that roles sharing a base_url agree
+
+    def _apply_version_defaults(self) -> None:
+        """Fill unset fields from VERSION_DEFAULTS / role_max_tokens_default.
+
+        A field this method filled before (``defaults_resolved``) and that still holds
+        that value counts as unset, so ``dataclasses.replace`` with a new
+        prompt_version, or with thinking turned off, re-derives it. A field changed
+        since is an explicit value and is kept.
+        """
+        previous = dict(self.defaults_resolved)
+        resolved: dict[str, Any] = {}
+
+        def unset(key: str, value: Any) -> bool:
+            return value is None or (key in previous and previous[key] == value)
+
+        for name, default in VERSION_DEFAULTS[self.prompt_version].items():
+            if unset(name, getattr(self, name)):
+                setattr(self, name, default)
+                resolved[name] = default
+        for role in ("root", "sub"):
+            mc = self.role(role)
+            key = f"{role}.max_tokens"
+            if unset(key, mc.max_tokens):
+                value = role_max_tokens_default(self.prompt_version, role, mc.enable_thinking)
+                mc = dataclasses.replace(mc, max_tokens=value)
+                setattr(self, role, mc)
+                resolved[key] = value
+            key = f"{role}.timeout"
+            if unset(key, mc.timeout):
+                timeout = ROLE_TIMEOUT_DEFAULTS[self.prompt_version]
+                setattr(self, role, dataclasses.replace(mc, timeout=timeout))
+                resolved[key] = timeout
+        self.defaults_resolved = resolved
 
     @property
     def effective_subcall_chars(self) -> int:
@@ -282,7 +390,7 @@ class RLMConfig:
 
 
 def _build(kind: type, raw: Mapping[str, Any], where: str) -> Any:
-    allowed = {f.name for f in dataclasses.fields(kind)}
+    allowed = {f.name for f in dataclasses.fields(kind)} - {"defaults_resolved"}
     unknown = sorted(set(raw) - allowed)
     if unknown:
         raise ConfigError(f"{where}: unknown field(s) {', '.join(unknown)}")
