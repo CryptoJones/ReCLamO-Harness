@@ -60,6 +60,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import openai
+
 from reclamo.client import Completion, ToolCall, Usage
 from reclamo.config import RLMConfig
 from reclamo.errors import RLMTimeout, RLMTokenLimit
@@ -100,6 +102,9 @@ class LMLike(Protocol):
         *,
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
+        timeout: float | None = None,
+        retry: bool = True,
+        deadline: float | None = None,
     ) -> Completion: ...
 
 
@@ -110,12 +115,21 @@ REPLFactory = Callable[[RLMConfig, LLMHandler], REPL]
 ANSWER_VAR_NAMES = ("final_answer", "answer_text", "result", "final")
 # Forced-finish ``why`` -> the run's stop_reason.
 FORCED_STOP_REASONS = {"turns": "max_iterations", "time": "timeout", "errors": "error_limit"}
-# The root-timeout forced finish is one call, thinking off, capped at this many seconds.
+# Issue #51: every forced finish is one attempt (no HTTP retry) whose request timeout is
+# min(root timeout, time left before max_timeout + FORCED_FINISH_TIMEOUT). Past the
+# deadline that is min(root timeout, 60 s), thinking off. Root and sub requests in the
+# loop are capped by the time left, and later blocks of a turn are skipped once it has
+# passed, so a run ends within max_timeout + FORCED_FINISH_TIMEOUT + ~1 s (the client's
+# minimum request timeout). Not bounded: one REPL block already computing at the
+# deadline (up to exec_timeout); its sub-calls are refused, but it is not killed,
+# because killing the worker would lose every variable the forced finish needs.
 FORCED_FINISH_TIMEOUT = 60.0
 CHARS_PER_TOKEN = 3.5
 KEEP_RECENT_TURNS = 4
 SUMMARY_CHARS = 1_500
 NO_ACTION_PROMPT = no_action_prompt("fence")
+TIME_UP = "the run's time (max_timeout) ran out"
+ERROR_LIMIT = "the run stopped at the error limit"
 TOOL_NAMES = ("execute_python", "final_answer")
 RLM_QUERY_PROMPT = (
     "The context holds a task handed down by a parent process: instructions and the "
@@ -351,7 +365,14 @@ class RLM:
             sent = history
             if upstream:
                 sent = [*history, {"role": "user", "content": upstream_user_prompt(query, i - 1)}]
-            completion, notes = self._root_call(sent)
+            try:
+                completion, notes = self._root_call(sent)
+            except RLMTimeout:
+                # Issue #51: the root request ran into the deadline (it is capped by it).
+                if self.depth > 0:
+                    raise
+                self.logger.event("timeout", depth=self.depth, turn=i, during="root_call")
+                return self._forced_finish(history, repl, answer_state, i - 1, started, why="time")
             content = completion.content
             if self.logger.sft_path:
                 self.logger.sft(list(sent), content, depth=self.depth, turn=i)
@@ -361,6 +382,8 @@ class RLM:
             blocks = find_code_blocks(content)
             results: list[ExecResult] = []
             for k, block in enumerate(blocks, 1):
+                if self._past_deadline():
+                    break  # issue #51: later blocks are skipped once time is up
                 self.printer.code(k, block)
                 res = self._exec(repl, block)
                 results.append(res)
@@ -384,7 +407,7 @@ class RLM:
                 # Issue #50: the error limit ends the loop through the forced finish, not
                 # an exception, so the REPL's work is not lost. The outputs go into the
                 # history first so the forced call sees the errors.
-                self._error_limit_outputs(history, kinds, blocks, results)
+                self._flush_outputs(history, kinds, blocks, results, ERROR_LIMIT)
                 self._log_iteration(i, messages_in, completion, blocks, results, notes, None)
                 self._log_error_limit(i, consecutive_errors)
                 return self._forced_finish(history, repl, answer_state, i, started, why="errors")
@@ -415,6 +438,22 @@ class RLM:
                 self._stats["final_rejections"] += 1
                 if cand.looks_like_plan:
                     rejected_plan = cand.value
+
+            if self._past_deadline():
+                # Issue #51: the turn ran past max_timeout. Store what ran, then the
+                # time-bounded forced finish (a child raises, as at a turn start).
+                if self.depth > 0:
+                    raise self._timeout_error(repl, answer_state)
+                self._flush_outputs(history, kinds, blocks, results, TIME_UP)
+                self._log_iteration(i, messages_in, completion, blocks, results, notes, decision)
+                self.logger.event(
+                    "timeout",
+                    depth=self.depth,
+                    turn=i,
+                    during="turn",
+                    skipped_blocks=len(blocks) - len(results),
+                )
+                return self._forced_finish(history, repl, answer_state, i, started, why="time")
 
             # Compose the next user message: outputs, then notes, then the turn line.
             parts: list[str] = []
@@ -500,7 +539,13 @@ class RLM:
             self._turn_max_prompt = 0
             messages_in = len(history)
 
-            completion, notes = self._root_call(history, tools)
+            try:
+                completion, notes = self._root_call(history, tools)
+            except RLMTimeout:
+                if self.depth > 0:
+                    raise
+                self.logger.event("timeout", depth=self.depth, turn=i, during="root_call")
+                return self._forced_finish(history, repl, answer_state, i - 1, started, why="time")
             content = completion.content
             calls = completion.tool_calls or []
             assistant: dict[str, Any] = {"role": "assistant", "content": content}
@@ -522,6 +567,7 @@ class RLM:
             finals: dict[int, dict[str, Any]] = {}
             codes: list[str] = []
             results: list[ExecResult] = []
+            skipped = 0  # execute_python calls not run because time ran out (#51)
             for k, call in enumerate(calls):
                 if call.name not in TOOL_NAMES:
                     outputs[k] = (
@@ -543,6 +589,9 @@ class RLM:
                     outputs[k] = "Error: execute_python needs a non-empty string argument `code`."
                     slips.append("malformed_args")
                     continue
+                if self._past_deadline():
+                    skipped += 1  # no outputs[k]: flushed as "Not run" below
+                    continue
                 self.printer.code(len(codes) + 1, code)
                 res = self._exec(repl, code)
                 self.printer.output(len(codes) + 1, res.output)
@@ -558,6 +607,8 @@ class RLM:
             if fenced:
                 slips.append("fenced_code")
                 for block in fenced:
+                    if self._past_deadline():
+                        break
                     self.printer.code(len(codes) + 1, block)
                     res = self._exec(repl, block)
                     self.printer.output(len(codes) + 1, res.output)
@@ -588,19 +639,16 @@ class RLM:
             if consecutive_errors >= cfg.max_errors:
                 # Issue #50: forced finish instead of RLMErrorLimit. Every tool call gets
                 # its answer first so the history stays valid for the chat template.
-                for k, call in enumerate(calls):
-                    text = outputs.get(k, "Not run: the run stopped at the error limit.")
-                    msg = {"role": "tool", "tool_call_id": call.id, "content": text}
-                    self._append(history, kinds, msg, "repl")
-                if fenced_results:
-                    self._error_limit_outputs(history, kinds, fenced, fenced_results)
+                self._flush_tool_outputs(
+                    history, kinds, calls, outputs, fenced, fenced_results, ERROR_LIMIT
+                )
                 log(None)
                 self._log_error_limit(i, consecutive_errors)
                 return self._forced_finish(history, repl, answer_state, i, started, why="errors")
 
             decision: dict[str, Any] | None = None
             for k, args in finals.items():
-                cand, err = _final_from_args(args, has_code=bool(codes))
+                cand, err = _final_from_args(args, has_code=bool(codes) or skipped > 0)
                 if cand is None:
                     outputs[k] = f"Error: {err}"
                     slips.append("malformed_args")
@@ -651,6 +699,23 @@ class RLM:
                     self._slip("text_no_tool")
                     notes.append(no_action_prompt("tools"))
 
+            if self._past_deadline():
+                # Issue #51: as in the fence loop. Every call still gets its tool reply.
+                if self.depth > 0:
+                    raise self._timeout_error(repl, answer_state)
+                self._flush_tool_outputs(
+                    history, kinds, calls, outputs, fenced, fenced_results, TIME_UP
+                )
+                log(decision)
+                self.logger.event(
+                    "timeout",
+                    depth=self.depth,
+                    turn=i,
+                    during="turn",
+                    skipped_blocks=skipped + len(fenced) - len(fenced_results),
+                )
+                return self._forced_finish(history, repl, answer_state, i, started, why="time")
+
             # One tool message per call, in call order, each answering its tool_call_id.
             for k, call in enumerate(calls):
                 msg = {"role": "tool", "tool_call_id": call.id, "content": outputs[k]}
@@ -694,26 +759,72 @@ class RLM:
 
     # --- pieces -----------------------------------------------------------
 
-    def _error_limit_outputs(
+    def _flush_outputs(
         self,
         history: list[dict[str, Any]],
         kinds: list[str],
         blocks: list[str],
         results: list[ExecResult],
+        why: str,
     ) -> None:
-        """Append the erroring turn's block outputs before the error-limit forced finish."""
+        """Append a stopping turn's block outputs before its forced finish.
+
+        ``results`` may be shorter than ``blocks`` when time ran out (issue #51); the
+        blocks that never ran get one line saying so.
+        """
+        not_run = len(blocks) - len(results)
+        note = f"[{not_run} later block(s) not run: {why}]" if not_run > 0 else ""
         if self.cfg.planner_style == "upstream-rlm-v0" and self.cfg.protocol == "fence":
-            for block, res in zip(blocks, results, strict=True):
+            for block, res in zip(blocks, results, strict=False):
                 msg = upstream_code_output(block, res, self.cfg.output_truncate_chars)
                 self._append(history, kinds, {"role": "user", "content": msg}, "repl")
+            if note:
+                self._append(history, kinds, {"role": "user", "content": note}, "note")
             return
         parts = [
-            f"{f'[block {k} output]' if len(results) > 1 else '[output]'}\n"
+            f"{f'[block {k} output]' if len(blocks) > 1 else '[output]'}\n"
             f"{res.output or '(no output)'}"
             for k, res in enumerate(results, 1)
         ]
+        if note:
+            parts.append(note)
         if parts:
             self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, "repl")
+
+    def _flush_tool_outputs(
+        self,
+        history: list[dict[str, Any]],
+        kinds: list[str],
+        calls: list[ToolCall],
+        outputs: dict[int, str],
+        fenced: list[str],
+        fenced_results: list[ExecResult],
+        why: str,
+    ) -> None:
+        """Tools protocol: one tool reply per call (a call that never ran says so)."""
+        for k, call in enumerate(calls):
+            text = outputs.get(k, f"Not run: {why}.")
+            msg = {"role": "tool", "tool_call_id": call.id, "content": text}
+            self._append(history, kinds, msg, "repl")
+        if fenced:
+            self._flush_outputs(history, kinds, fenced, fenced_results, why)
+
+    def _past_deadline(self) -> bool:
+        b = self._budget
+        return b is not None and b.deadline is not None and time.monotonic() > b.deadline
+
+    def _deadline_kw(self) -> dict[str, Any]:
+        """``deadline=`` for a loop request (issue #51), only when the run has one."""
+        b = self._budget
+        return {"deadline": b.deadline} if b is not None and b.deadline is not None else {}
+
+    def _timeout_error(
+        self, repl: REPL | None = None, answer_state: dict[str, Any] | None = None
+    ) -> RLMTimeout:
+        partial = self._partial(repl, answer_state) if repl is not None else None
+        return RLMTimeout(
+            f"run exceeded max_timeout={self.cfg.max_timeout:g}s", partial_answer=partial
+        )
 
     def _log_error_limit(self, turn: int, consecutive: int) -> None:
         self.logger.event(
@@ -753,9 +864,11 @@ class RLM:
     ) -> tuple[Completion, list[str]]:
         notes: list[str] = []
         # ``tools`` only travels when set, so fence-protocol clients need not accept it.
+        # Issue #51: the request is capped by the run's deadline; running into it (or
+        # starting past it) raises RLMTimeout so the loop can take the forced finish.
         extra: dict[str, Any] = {"tools": tools} if tools else {}
-        completion = self.client.complete(history, "root", **extra)
-        self._budget_add(completion)
+        extra.update(self._deadline_kw())
+        completion = self._deadline_call(history, extra)
         if (
             completion.finish_reason == "length"
             and not completion.content.strip()
@@ -765,10 +878,21 @@ class RLM:
                 "[note] the previous attempt spent its whole output budget thinking; "
                 "it was retried without thinking."
             )
-            completion = self.client.complete(history, "root", enable_thinking=False, **extra)
-            self._budget_add(completion)
+            completion = self._deadline_call(history, {**extra, "enable_thinking": False})
             completion.attempts += 1
         return completion, notes
+
+    def _deadline_call(self, history: list[dict[str, Any]], extra: dict[str, Any]) -> Completion:
+        if self._past_deadline():
+            raise self._timeout_error()
+        try:
+            completion = self.client.complete(history, "root", **extra)
+        except openai.APIError as exc:
+            if self._past_deadline():
+                raise self._timeout_error() from exc
+            raise
+        self._budget_add(completion)
+        return completion
 
     def _budget_add(self, completion: Completion) -> None:
         assert self._budget is not None
@@ -823,6 +947,8 @@ class RLM:
                     f"sub-call budget for this run exhausted ({budget.max_subcalls}); "
                     "finish with what you have"
                 )
+            if self._past_deadline():
+                raise self._timeout_error()  # issue #51: no new request past the deadline
             data = contexts[i] if contexts is not None else None
             if data is None:
                 child_context, child_query = prompt, RLM_QUERY_PROMPT
@@ -851,7 +977,9 @@ class RLM:
                 if data is not None:  # flatten (question, data) into one prompt
                     text = data if isinstance(data, str) else json.dumps(data, ensure_ascii=False)
                     prompt = f"{prompt}\n\n{text}"
-                completion = self.client.complete([{"role": "user", "content": prompt}], "sub")
+                completion = self.client.complete(
+                    [{"role": "user", "content": prompt}], "sub", **self._deadline_kw()
+                )
                 budget.add(completion)
                 answer = completion.content
                 served = self._served(completion, "sub")
@@ -874,10 +1002,7 @@ class RLM:
         assert self._budget is not None
         b = self._budget
         if b.deadline is not None and time.monotonic() > b.deadline:
-            raise RLMTimeout(
-                f"run exceeded max_timeout={self.cfg.max_timeout:g}s",
-                partial_answer=self._partial(repl, answer_state),
-            )
+            raise self._timeout_error(repl, answer_state)
         if b.max_tokens is not None and b.usage.total_tokens > b.max_tokens:
             raise RLMTokenLimit(
                 f"run used {b.usage.total_tokens} tokens (max_tokens_total={b.max_tokens})",
@@ -935,17 +1060,7 @@ class RLM:
         else:
             self._append(history, kinds=[], msg={"role": "user", "content": prompt}, kind="repl")
         tools = tool_specs(self.cfg.output_truncate_chars) if tools_mode else None
-        if why == "time":
-            # Bounded: the run is already past its deadline, so exactly one attempt,
-            # thinking off, with a short request timeout.
-            extra: dict[str, Any] = {"tools": tools} if tools else {}
-            timeout = min(self.cfg.root.timeout, FORCED_FINISH_TIMEOUT)
-            completion = self.client.complete(
-                history, "root", enable_thinking=False, timeout=timeout, retry=False, **extra
-            )
-            self._budget_add(completion)
-        else:
-            completion, _notes = self._root_call(history, tools)
+        completion = self._forced_call(history, tools, why)
         content = completion.content
 
         candidates: list[FinalCandidate] = []
@@ -996,6 +1111,68 @@ class RLM:
             **detail,
         )
         return self._finish(answer, stop, iterations, started)
+
+    def _forced_timeout(self) -> float:
+        """Issue #51: a forced finish may run FORCED_FINISH_TIMEOUT past the deadline."""
+        limit = self.cfg.root.timeout
+        b = self._budget
+        if b is None or b.deadline is None:
+            return limit
+        left = max(b.deadline - time.monotonic(), 0.0)
+        return min(limit, left + FORCED_FINISH_TIMEOUT)
+
+    def _forced_call(
+        self, history: list[dict[str, Any]], tools: list[dict[str, Any]] | None, why: str
+    ) -> Completion:
+        """The forced finish's model call, bounded whatever the reason (issue #51).
+
+        One attempt with no HTTP retry and a capped request timeout. Past the deadline
+        thinking is off. Otherwise the configured thinking is used and, as in the loop,
+        a reply that spent its whole budget thinking is retried once without thinking,
+        but only while the deadline has not passed. A failed request does not lose the
+        run: the fallbacks (answer dict, answer variable) still apply.
+        """
+        extra: dict[str, Any] = {"tools": tools} if tools else {}
+
+        def attempt(thinking: bool | None) -> Completion | None:
+            try:
+                c = self.client.complete(
+                    history,
+                    "root",
+                    enable_thinking=thinking,
+                    timeout=self._forced_timeout(),
+                    retry=False,
+                    **extra,
+                )
+            except openai.APIError as exc:
+                self.logger.event(
+                    "forced_finish_error",
+                    depth=self.depth,
+                    why=why,
+                    error=f"{type(exc).__name__}: {exc}"[:500],
+                )
+                return None
+            self._budget_add(c)
+            return c
+
+        completion = attempt(False if why == "time" else None)
+        if (
+            completion is not None
+            and why != "time"
+            and completion.finish_reason == "length"
+            and not completion.content.strip()
+            and not completion.tool_calls
+            and not self._past_deadline()
+        ):
+            retried = attempt(False)
+            if retried is not None:
+                retried.attempts += 1
+                completion = retried
+        if completion is None:
+            return Completion(
+                content="", reasoning=None, usage=None, finish_reason="error", latency=0.0
+            )
+        return completion
 
     def _finish(self, answer: str, reason: str, iterations: int, started: float) -> RLMResult:
         assert self._budget is not None
@@ -1123,7 +1300,7 @@ class RLM:
 
         summarized = False
         summary_served: dict[str, Any] = {}
-        if estimate() > limit:
+        if estimate() > limit and not self._past_deadline():
             body = "\n\n".join(f"--- turn {t} ---\n{text}" for t, text in elided)
             prompt = (
                 "Below are outputs from earlier steps of a data-analysis session. Summarize "
@@ -1131,7 +1308,16 @@ class RLM:
                 "names created and what they hold, and anything still unresolved.\n\n"
                 f"{body[: cfg.subcall_chars]}"
             )
-            completion = self.client.complete([{"role": "user", "content": prompt}], "sub")
+            try:
+                completion = self.client.complete(
+                    [{"role": "user", "content": prompt}], "sub", **self._deadline_kw()
+                )
+            except openai.APIError:
+                if not self._past_deadline():
+                    raise
+                # Issue #51: the summary ran into the deadline; the next root call
+                # takes the forced finish, which never reads this placeholder's turn.
+                completion = Completion("(not summarized: " + TIME_UP + ")", None, None, None, 0.0)
             self._budget_add(completion)
             summary_served = self._served(completion, "sub")
             first, last = elided[0][0], elided[-1][0]

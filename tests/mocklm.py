@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import itertools
 import json
+import time
 from collections.abc import Callable
 from typing import Any
+
+import openai
 
 from reclamo.client import Completion, ToolCall, Usage
 
@@ -40,16 +43,31 @@ def tool_turn(*calls: ToolCall, content: str = "", finish_reason: str = "tool_ca
     return c
 
 
+def api_timeout() -> openai.APITimeoutError:
+    """An APITimeoutError without a transport request (its constructor's type varies)."""
+    exc = openai.APITimeoutError.__new__(openai.APITimeoutError)
+    Exception.__init__(exc, "Request timed out.")
+    return exc
+
+
 class MockLM:
-    """``root`` is a queue of scripted responses; ``sub`` answers sub-calls."""
+    """``root`` is a queue of scripted responses; ``sub`` answers sub-calls.
+
+    ``latency`` (seconds, or ``{role: seconds}``) makes each call take that long, like
+    a slow server. A call whose ``timeout`` / ``deadline`` is shorter waits only that
+    long and raises ``openai.APITimeoutError`` without consuming the script, as the
+    real client would.
+    """
 
     def __init__(
         self,
-        root: list[str | Completion],
+        root: list[str | Completion | BaseException],
         sub: list[str] | Callable[[str], str] | None = None,
+        latency: float | dict[str, float] = 0.0,
     ) -> None:
         self.root = list(root)
         self.sub = sub
+        self.latency = latency
         self.calls: list[dict[str, Any]] = []
 
     def complete(
@@ -62,6 +80,7 @@ class MockLM:
         tools: list[dict[str, Any]] | None = None,
         timeout: float | None = None,
         retry: bool = True,
+        deadline: float | None = None,
     ) -> Completion:
         msgs = [dict(m) for m in messages]
         self.calls.append(
@@ -72,12 +91,24 @@ class MockLM:
                 "tools": tools,
                 "timeout": timeout,
                 "retry": retry,
+                "deadline": deadline,
             }
         )
+        delay = self.latency.get(role, 0.0) if isinstance(self.latency, dict) else self.latency
+        if delay:
+            limit = float("inf") if timeout is None else timeout
+            if deadline is not None:
+                limit = min(limit, max(deadline - time.monotonic(), 0.0))
+            if delay > limit:
+                time.sleep(limit)
+                raise api_timeout()
+            time.sleep(delay)
         if role == "root":
             if not self.root:
                 raise AssertionError("MockLM: root script exhausted")
             item = self.root.pop(0)
+            if isinstance(item, BaseException):
+                raise item  # a scripted request failure
             return item if isinstance(item, Completion) else completion(item)
         prompt = msgs[-1]["content"]
         if isinstance(self.sub, list):
