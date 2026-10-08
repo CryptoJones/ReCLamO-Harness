@@ -22,11 +22,30 @@
       },
       "self_test_exit": 0,
       "original_status": "pass",
-      "fix_attempts": [],
+      "fix_attempts": [
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "GLaDOS (grok-4.6) - original author",
+          "file": "fixed/round3/self/GLaDOS.py",
+          "sha256": "24187030fa2571958a89a5ce4311ef6de2f51e4b842cd5f58abc5239d0e073f5",
+          "request": "fixed/round3/self/requests/GLaDOS.md",
+          "response": "fixed/round3/self/answers/GLaDOS.md",
+          "result": "fail: own self-test (hedge scored 1.0)"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/GLaDOS.py",
+          "sha256": "27f5066cfc517f7be7d061427e72ddf3d4a3196cb9f06fdc0dfe6dad9016258d",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
+        }
+      ],
       "active": {
         "file": "fixed/active/GLaDOS.py",
-        "sha256": "39233a93cfe4b00398fd805d27bc53855e0f0ee0e48b5c63184c894cef56e7a8",
-        "source": "original"
+        "sha256": "27f5066cfc517f7be7d061427e72ddf3d4a3196cb9f06fdc0dfe6dad9016258d",
+        "source": "round-3 minimax fix"
       }
     },
     "SHODAN": {
@@ -43,11 +62,30 @@
       },
       "self_test_exit": 0,
       "original_status": "pass",
-      "fix_attempts": [],
+      "fix_attempts": [
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "SHODAN (gpt-6-astra) - original author",
+          "file": "fixed/round3/self/SHODAN.py",
+          "sha256": "bc862803bf4e1e8750c8b99133c8eb0625f253f8be1825abb782d16902d111f9",
+          "request": "fixed/round3/self/requests/SHODAN.md",
+          "response": "fixed/round3/self/answers/SHODAN.md",
+          "result": "fail: SyntaxError"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/SHODAN.py",
+          "sha256": "c0a8d0658ed465bb599f0ba399d2fce36c12b2bf4cb5a318036acc5e1787467e",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
+        }
+      ],
       "active": {
         "file": "fixed/active/SHODAN.py",
-        "sha256": "90568550c9f8528231f31be480e1b45b6b430af8eb04b5a95c6dc7ca9b0b9393",
-        "source": "original"
+        "sha256": "c0a8d0658ed465bb599f0ba399d2fce36c12b2bf4cb5a318036acc5e1787467e",
+        "source": "round-3 minimax fix"
       }
     },
     "TheDixieFlatline": {
@@ -84,12 +122,30 @@
           "sha256": "c23d490f275836c542d8dc4ca7b319022ba140e625c6f30c6a7e49e9dbbf41e0",
           "notes": "fixed/round2/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "TheDixieFlatline (gemini-3.1-pro-high) - original author",
+          "file": "fixed/round3/self/TheDixieFlatline.py",
+          "sha256": "d74490a0aef5334a76542a5911e13687f851d77d3381395ee4528ad3c5c7275a",
+          "request": "fixed/round3/self/requests/TheDixieFlatline.md",
+          "response": "fixed/round3/self/answers/TheDixieFlatline.md",
+          "result": "pass check.py, but CORRECTION email still not emitted (18/100 seeds underivable)"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/TheDixieFlatline.py",
+          "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/TheDixieFlatline.py",
-        "sha256": "db89a777741f6526f70a206f88dfdb0949fbef0e9244215bb4236c23ce290bfa",
-        "source": "round-2 self-fix"
+        "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
+        "source": "round-3 minimax fix"
       }
     },
     "Cerebex": {
@@ -129,12 +185,30 @@
           "notes": "fixed/minimax/TASK-py311.md",
           "result": "pass",
           "change": "Author's self-fix put a \\u2019 escape inside an f-string expression (valid on 3.12, SyntaxError on 3.11; the brief requires 3.11). Hoisted the string into a module constant; output byte-identical to the author's fix on 3.11 and 3.12."
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "Cerebex (glm-5.3-flash) - original author",
+          "file": "fixed/round3/self/Cerebex.py",
+          "sha256": "44c0c3aa9da6668302c727eac926722543fea9e4624f790e6415446a1043f295",
+          "request": "fixed/round3/self/requests/Cerebex.md",
+          "response": "fixed/round3/self/answers/Cerebex.md",
+          "result": "pass check.py but 20 scorer-battery flags (show-work and hedges)"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/Cerebex.py",
+          "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/Cerebex.py",
-        "sha256": "516acce16351c7709e3a7d274d2c5a064d66ef3f5c47d449fda8e967199bb3f7",
-        "source": "self-fix + minimax py3.11 syntax patch"
+        "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
+        "source": "round-3 minimax fix"
       }
     },
     "Neuromancer": {
@@ -166,12 +240,30 @@
           "sha256": "2ffbb4e1604fdf385e063f25bb614b47428c9e7135de7f2df65de0dc1f0d584c",
           "notes": "fixed/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "Neuromancer (deepseek-v4-flash) - original author",
+          "file": "fixed/round3/self/Neuromancer.py",
+          "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
+          "request": "fixed/round3/self/requests/Neuromancer.md",
+          "response": "fixed/round3/self/answers/Neuromancer.md",
+          "result": "pass (0 flags)"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/Neuromancer.py",
+          "sha256": "13cbb82db2ee6434616751008356f2c3ac9060703448e9d43712ea2cf86f6f51",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/Neuromancer.py",
-        "sha256": "a21e3d7081d320246c81d809f5d8e797e3f567a6dfc347ae4941e83748448e08",
-        "source": "self-fix"
+        "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
+        "source": "round-3 self-fix"
       }
     },
     "SELMA": {
@@ -223,12 +315,30 @@
           "sha256": "6183e70ebd53b1070efb7b4a07f1d9a9cbeeb347a45e9c888f302de29845fed2",
           "notes": "fixed/round2/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "SELMA (nemotron-3-super-120b-a12b:free) - original author",
+          "file": "fixed/round3/self/SELMA.py",
+          "sha256": "082f5789884ce46e69651e64360f1655c046bbbc132ddf1882e79e1006ac674a",
+          "request": "fixed/round3/self/requests/SELMA.md",
+          "response": "fixed/round3/self/answers/SELMA.md",
+          "result": "fail: own self-test (name in sentence scored 0)"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/SELMA.py",
+          "sha256": "df2255c9cad6fb201892071cc8474084b8aca1fb00f75a2b357479ed0f0d9add",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/SELMA.py",
-        "sha256": "6183e70ebd53b1070efb7b4a07f1d9a9cbeeb347a45e9c888f302de29845fed2",
-        "source": "round-2 minimax fix"
+        "sha256": "df2255c9cad6fb201892071cc8474084b8aca1fb00f75a2b357479ed0f0d9add",
+        "source": "round-3 minimax fix"
       }
     },
     "MasterControl": {
@@ -280,12 +390,30 @@
           "sha256": "53e712e9019f2c646f51f6060712fec97e7650cae4fd3a21af64cf61057ebcd5",
           "notes": "fixed/round2/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "MasterControl (mistral-medium-3.1) - original author",
+          "file": "fixed/round3/self/MasterControl.py",
+          "sha256": "cdd53fc07c375f8f7ca76dedb084c020fd488cba5d4f9978167d874c59d6e276",
+          "request": "fixed/round3/self/requests/MasterControl.md",
+          "response": "fixed/round3/self/answers/MasterControl.md",
+          "result": "fail: own self-test"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/MasterControl.py",
+          "sha256": "1b6ac56e8e7b425511c5611596cd194c9604ce316c5146edd9d57ec73e99e360",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/MasterControl.py",
-        "sha256": "53e712e9019f2c646f51f6060712fec97e7650cae4fd3a21af64cf61057ebcd5",
-        "source": "round-2 minimax fix"
+        "sha256": "1b6ac56e8e7b425511c5611596cd194c9604ce316c5146edd9d57ec73e99e360",
+        "source": "round-3 minimax fix"
       }
     },
     "Multivac": {
@@ -337,15 +465,34 @@
           "sha256": "db4ddee6c0d506905ed5fa33ea34652258524a6a06055109ce61440d1d292d2b",
           "notes": "fixed/round2/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 3,
+          "found_by": "independent audit (evals/independent/audit/REPORT.md)",
+          "by": "Multivac (hermes-4-405b) - original author",
+          "file": "fixed/round3/self/Multivac.py",
+          "sha256": "8cce748a8bd25068ac3f1e466e54050f6799e8a1866b48b08968752cfa88a898",
+          "request": "fixed/round3/self/requests/Multivac.md",
+          "response": "fixed/round3/self/answers/Multivac.md",
+          "result": "fail: own self-test"
+        },
+        {
+          "round": 3,
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round3/minimax/Multivac.py",
+          "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
+          "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
+          "result": "pass (check.py, self-test, 0 scorer-battery flags)"
         }
       ],
       "active": {
         "file": "fixed/active/Multivac.py",
-        "sha256": "db4ddee6c0d506905ed5fa33ea34652258524a6a06055109ce61440d1d292d2b",
-        "source": "round-2 minimax fix"
+        "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
+        "source": "round-3 minimax fix"
       }
     }
   },
   "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent.",
-  "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run."
+  "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run.",
+  "round3_note": "Round 3 (2026-10-08): fixes for the independent audit (audit/REPORT.md): Cerebex hidden-division key, SELMA date/order contradiction, TheDixieFlatline missing CORRECTION email, MasterControl/Neuromancer wording, and scorer fairness in all 8. Verified: check.py, each self-test, audit/scripts/scorer_battery.py (1,701 probes, 0 flags), the SELMA and Dixie text solvers, and byte-identical generation for the scorer-only tasks (GLaDOS, SHODAN, Multivac). Earlier #22 runs used the pre-round-3 set."
 }

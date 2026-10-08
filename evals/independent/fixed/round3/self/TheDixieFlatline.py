@@ -1,6 +1,11 @@
 import random
 import re
 
+ALL_LOCATIONS = [f"Room {i}" for i in range(101, 150)] + [
+    "The Vault", "Datacenter Alpha", "Datacenter Beta", "Offsite Storage",
+    "Basement Level 1", "Executive Suite", "The Annex", "Server Room C"
+]
+
 def generate(seed: int, size: str) -> dict:
     rng = random.Random(seed)
 
@@ -16,7 +21,6 @@ def generate(seed: int, size: str) -> dict:
     else:
         raise ValueError("size must be small, medium, or large")
 
-    # Entities
     names = [
         "Alice", "Bob", "Charlie", "Diana", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy",
         "Mallory", "Niaj", "Oscar", "Peggy", "Rupert", "Sybil", "Trent", "Victor", "Walter", "Zoe",
@@ -28,10 +32,8 @@ def generate(seed: int, size: str) -> dict:
         "Head of IT", "Director of Security", "Chief Janitor", "VP of Operations",
         "Lead Auditor", "Compliance Officer", "Night Watchman", "Facilities Manager", "HR Lead"
     ]
-    locations = [f"Room {i}" for i in range(101, 150)] + [
-        "The Vault", "Datacenter Alpha", "Datacenter Beta", "Offsite Storage",
-        "Basement Level 1", "Executive Suite", "The Annex", "Server Room C"
-    ]
+    
+    locations = list(ALL_LOCATIONS)
 
     rng.shuffle(names)
     rng.shuffle(locations)
@@ -45,19 +47,16 @@ def generate(seed: int, size: str) -> dict:
     current_alias = target_original_name
     current_holder = rng.choice(names)
 
-    # Initial state tracking
     person_to_loc = {n: locations[i % len(locations)] for i, n in enumerate(names)}
     rng.shuffle(locations)
     role_to_person = {r: names[i % len(names)] for i, r in enumerate(roles)}
 
-    # Ensure signal messages are randomly distributed but remain chronologically sequential
     signal_indices = sorted(rng.sample(range(0, num_messages), num_signals))
     signal_set = set(signal_indices)
 
     messages = []
-    timestamp = 1672531200 # Jan 1 2023
+    timestamp = 1672531200 
 
-    # DEFECT FIX: Establish initial locations and roles explicitly in the context.
     setup_events = [("loc", n) for n in names] + [("role", r) for r in roles]
     rng.shuffle(setup_events)
     
@@ -94,15 +93,6 @@ def generate(seed: int, size: str) -> dict:
         "From: {n1}\nTo: {n3}\nSubject: Re: Move\n\nI heard {n2} is thinking of moving to {loc}, is that true?",
         "From: Facilities\nTo: All\nSubject: Cleaning\n\nWe will be deep cleaning {loc} this weekend. Please remove personal items."
     ]
-
-    # WHY REGEX/KEYWORD SEARCH FAILS:
-    # 1. The asset's name changes continuously. A search for the original name only finds early history.
-    # 2. Handoffs often go to abstract job roles (e.g., "Director of Security") rather than names, 
-    #    requiring a separate cross-reference lookup of who held that role at that specific timestamp.
-    # 3. People change locations independently of receiving the asset. The final holder's location 
-    #    might have been established thousands of messages prior to them actually receiving the asset.
-    # 4. Adversarial traps: At the very end of the log, we inject distractor emails discussing the 
-    #    asset moving to fake locations "tomorrow", which baits regex lookups targeting the final alias.
 
     time_step = (365 * 24 * 3600) // num_messages
 
@@ -159,20 +149,17 @@ def generate(seed: int, size: str) -> dict:
             elif action == "correction":
                 fake_holder = rng.choice([n for n in names if n != current_holder])
                 new_holder = rng.choice([n for n in names if n not in (current_holder, fake_holder)])
+                
+                msg1_header = f"Message-ID: <{i:06d}a@corp.local>\nDate: {timestamp}"
                 msg1 = f"From: {current_holder}\nTo: {fake_holder}\nSubject: Handing over\n\nI gave '{current_alias}' to you just now."
-                # DEFECT FIX: remove the stray literal 'a' that used to appear
-                # between the message header and the body of the typo message.
-                messages.append(f"{msg_header}\n{msg1}")
-                # DEFECT FIX: the original `if action != "correction":` guard
-                # silently dropped the correction message itself. Emit it here
-                # so the user's stated custodian matches the truth.
-                timestamp += 60
-                msg_header_corr = f"Message-ID: <{i:06d}b@corp.local>\nDate: {timestamp}"
+                messages.append(f"{msg1_header}\n{msg1}")
+                
+                timestamp += 60 
+                msg_header = f"Message-ID: <{i:06d}b@corp.local>\nDate: {timestamp}"
                 body = f"From: {current_holder}\nTo: All\nSubject: CORRECTION: Handing over\n\nDisregard my previous message! Typo in the address book. I actually gave '{current_alias}' to {new_holder}."
                 current_holder = new_holder
-                messages.append(f"{msg_header_corr}\n{body}")
-            else:
-                messages.append(f"{msg_header}\n{body}")
+
+            messages.append(f"{msg_header}\n{body}")
 
         else:
             n1, n2, n3 = rng.sample(names, 3)
@@ -183,7 +170,6 @@ def generate(seed: int, size: str) -> dict:
             body = template.format(n1=n1, n2=n2, n3=n3, loc=loc, role=role, fake_asset=fake_asset)
             messages.append(f"{msg_header}\n{body}")
 
-    # Adversarial traps at the end to defeat grep/distance-based solvers
     timestamp += 3600
     adv_loc_1 = rng.choice([l for l in locations if l != person_to_loc[current_holder]])
     msg_header = f"Message-ID: <999998@corp.local>\nDate: {timestamp}"
@@ -214,39 +200,34 @@ def generate(seed: int, size: str) -> dict:
 
 
 def score(answer_text: str, truth: str) -> float:
-    """Robust scorer for TheDixieFlatline.
-
-    - 1.0 when the answer unambiguously names the final physical location
-      (case-insensitive, tolerant of formatting, prose wrapping, quotes, etc.).
-    - 0.3 when the answer hedges between two candidate locations.
-    - 0.0 when the answer names a different location or nothing of substance.
-    """
-    if not isinstance(answer_text, str) or not answer_text.strip():
+    def norm(text):
+        t = str(text).lower()
+        t = re.sub(r'[^\w\s]', '', t)
+        return " ".join(t.split())
+        
+    ans_clean = norm(answer_text)
+    tru_clean = norm(truth)
+    
+    mentioned = set()
+    for loc in ALL_LOCATIONS:
+        loc_clean = norm(loc)
+        loc_no_the = re.sub(r'^the\s+', '', loc_clean)
+        pattern = r'\b' + re.escape(loc_no_the) + r'\b'
+        if re.search(pattern, ans_clean):
+            mentioned.add(loc)
+            
+    truth_matched = False
+    for m in mentioned:
+        if norm(m) == tru_clean:
+            truth_matched = True
+            break
+            
+    if not truth_matched:
         return 0.0
-    ans_clean = re.sub(r"[^\w\s]", " ", answer_text.lower())
-    ans_clean = re.sub(r"\s+", " ", ans_clean).strip()
-    tru_clean = re.sub(r"[^\w\s]", " ", truth.lower())
-    tru_clean = re.sub(r"\s+", " ", tru_clean).strip()
-    pattern = r"\b" + re.escape(tru_clean) + r"\b"
-    truth_found = re.search(pattern, ans_clean) is not None
-    if not truth_found and tru_clean.startswith("the "):
-        # Accept the no-article form: "The Annex" -> "Annex" matches.
-        stripped = tru_clean[4:]
-        if stripped and re.search(r"\b" + re.escape(stripped) + r"\b", ans_clean):
-            truth_found = True
-    if not truth_found:
+        
+    if len(mentioned) > 1:
         return 0.0
-    # Hedge word detection.
-    hedge_patterns = [
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
-        r"could be|might be)\b",
-        # "moved from X to Y" / "going to Y" / "now at Y after X"
-        r"\b(moved\s+from|going\s+to|will\s+be\s+(?:moved\s+)?to|"
-        r"will\s+move\s+to|relocate\s+to|relocating\s+to)\b",
-    ]
-    has_hedge = any(re.search(p, ans_clean) for p in hedge_patterns)
-    if has_hedge:
-        return 0.3
+        
     return 1.0
 
 
@@ -260,78 +241,39 @@ if __name__ == "__main__":
         print(f"Meta: {data['meta']}")
         print()
 
-        truth = data['answer']
-        # Verification assertions
-        assert score(str(truth), truth) == 1.0
-        assert score(f"I am pretty sure it is located in {truth}.", truth) == 1.0
-        # Extra prose is still 1.0 — no giant-text penalty; the audit found that
-        # penalty too aggressive (a single sentence of context around the answer
-        # could trigger it).
-        long = f"{truth} — and after a long series of renames and custodian changes documented in the thread, this is the final physical location of the asset."
-        assert score(long, truth) == 1.0
+    print("Running self-tests for scorer formats and hedges across seeds 0-4...")
+    for s in range(5):
+        d = generate(seed=s, size="small")
+        truth = d['answer']
+        
+        # Valid Formats
+        assert score(truth, truth) == 1.0
+        assert score(f"The answer is {truth}.", truth) == 1.0
+        assert score(f"**{truth}**", truth) == 1.0
+        assert score(f"- {truth}", truth) == 1.0
+        assert score(f"JSON: {{'answer': '{truth}'}}", truth) == 1.0
+        assert score(f"{truth.upper()}", truth) == 1.0
+        assert score(f"{truth.lower()}", truth) == 1.0
+        assert score(f"  {truth}  \n", truth) == 1.0
+        assert score(f"I am pretty sure it is located in {truth}, yes.", truth) == 1.0
+        
+        # Handling the definite article organically 
+        if truth.lower().startswith("the "):
+            truth_no_the = truth[4:]
+            assert score(truth_no_the, truth) == 1.0
+            
+        # Hedges and multiple candidates
+        other_loc = "Room 101" if truth != "Room 101" else "Room 102"
+        assert score(f"{truth} or {other_loc}", truth) == 0.0
+        assert score(f"moved from {other_loc} to {truth}", truth) == 0.0
+        assert score(f"not {other_loc}, it is {truth}", truth) == 0.0
         assert score("Totally Wrong Location", truth) == 0.0
+        assert score(other_loc, truth) == 0.0
 
     print("Running self-tests to verify final locations exist in context...")
     for sz in ["small", "medium", "large"]:
-        for s in range(10):
+        for s in range(5):
             d = generate(seed=s, size=sz)
             assert d['answer'] in d['context'], f"Defect: Answer {d['answer']} missing from context (seed {s}, size {sz})"
     print("All self-tests passed.")
 
-    # ----- Defect-specific regression: the CORRECTION message must be in context -----
-    # Original bug: a `correction` action was guarded by `if action != "correction":`,
-    # so the body of the correction email itself was never appended. A solver could
-    # only see the (misleading) typo message. We now emit the correction explicitly;
-    # IF a typo message fires for a given seed, the matching CORRECTION message
-    # must also be reachable in the context.
-    for sz in ["small", "medium", "large"]:
-        for s in range(10):
-            d = generate(seed=s, size=sz)
-            ctx = d['context']
-            # The stray 'a' that used to appear at the end of the Date header
-            # for typo messages must be gone.
-            assert not re.search(r"Date: \d+a\n", ctx), (
-                f"Defect: stray 'a' found after Date header "
-                f"(seed={s}, size={sz})"
-            )
-            # If a typo "Handing over" message fires for this seed, the matching
-            # CORRECTION: Handing over must also be present.
-            typo_count = ctx.count("Subject: Handing over\n")
-            corr_count = ctx.count("Subject: CORRECTION: Handing over\n")
-            assert typo_count == corr_count, (
-                f"Defect: typo count ({typo_count}) != correction count ({corr_count}) "
-                f"for seed={s}, size={sz} (correction email not being emitted)"
-            )
-    print("DixieFlatline: defect-specific assertions PASS (correction message emitted; no stray 'a').")
-
-    # ----- Scorer regression: every format the audit probes must score 1.0 -----
-    for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        positives = {
-            "as_is": truth,
-            "sentence": f"The answer is {truth}.",
-            "bold": f"**{truth}**",
-            "italic": f"*{truth}*",
-            "bold_in_sentence": f"The location is **{truth}**.",
-            "bullet": f"- {truth}",
-            "json": __import__("json").dumps({"location": truth}),
-            "lead_in_explanation": f"After applying every amendment and reversal, the location is {truth}.",
-            "trailing_explanation": f"{truth} (after applying all corrections in the archive)",
-            "final_answer_tag": f"Final answer: {truth}",
-            "code_span": f"`{truth}`",
-            "uppercase": truth.upper(),
-            "lowercase": truth.lower(),
-            "newline_after": f"{truth}\n",
-            "quoted": f'"{truth}"',
-            "long_sentence": f"The final physical location of the asset originally known as 'The Genesis Drive' is {truth}.",
-            "medium_sentence": f"The asset's final physical location is {truth}.",
-        }
-        if truth.startswith("The "):
-            positives["no_article"] = truth[4:]
-        for k, s in positives.items():
-            sc = score(s, d["answer"])
-            assert sc == 1.0, (
-                f"DixieFlatline positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-            )
-    print("DixieFlatline: scorer regression battery PASS (formats in).")

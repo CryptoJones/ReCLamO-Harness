@@ -218,7 +218,6 @@ def generate(seed: int, size: str) -> dict:
     sections = [[] for _ in SECTION_TITLES]
     gates = ("both", "either", "xor")
 
-    # Radio names are deliberately permuted independently of personal names.
     radio_names = list(CALLSIGNS)
     rng.shuffle(radio_names)
     radio_to_person = dict(zip(radio_names, CONTACTS))
@@ -333,7 +332,6 @@ def generate(seed: int, size: str) -> dict:
             "apply to every May shipment under this agreement."
         )
 
-    # Nicknames and docket numbers have no relationship to eligibility.
     nicknames = [f"{a} {n}" for a in ADJECTIVES for n in NOUNS]
     rng.shuffle(nicknames)
     used_dockets = set()
@@ -437,7 +435,6 @@ def generate(seed: int, size: str) -> dict:
         )
         paragraphs.append((4, provisional))
 
-        # Former/latter resolution is needed to associate final test outcomes.
         order = [("moisture", moisture), ("vibration", vibration)]
         rng.shuffle(order)
         first, second = order
@@ -542,8 +539,6 @@ def generate(seed: int, size: str) -> dict:
             "damaged": final_damage,
         })
 
-    # Different desks file their records independently. Corrections remain
-    # later than the records they supersede because section order is fixed.
     for paragraphs in sections:
         rng.shuffle(paragraphs)
     context = render()
@@ -602,29 +597,121 @@ def generate(seed: int, size: str) -> dict:
     }
 
 
-# Scoring parses answer formatting, not benchmark evidence. All seven numeric
-# totals must agree exactly. No partial credit or numeric tolerance is used.
-_NUMBER = re.compile(
-    r"(?<![\w.+-])"
-    r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-    r"(?![\w]|\.\d)"
+# Scoring concerns answer presentation only; it never parses the evidence.
+# All numeric claims must be accounted for, including numbers after "or",
+# negated alternatives, duplicate JSON keys, and subsequent corrections.
+# A scalar alone cannot answer this seven-office mapping question.
+_LABEL = re.compile(
+    r"\b(?:" + "|".join(re.escape(name) for name in OFFICES) + r")\b",
+    re.IGNORECASE,
 )
-_CONNECTORS = {
-    "a", "an", "and", "at", "balance", "closing", "credit", "credits",
-    "earned", "earns", "equals", "final", "for", "has", "is", "net",
-    "of", "office", "receives", "stands", "the", "to", "total", "totals",
-    "units",
-}
+_CANONICAL = {name.casefold(): name for name in OFFICES}
+
+# Capture malformed grouping, exponents, percentages, and abbreviated amounts
+# as whole tokens so they cannot quietly become a different integer.
+_NUMBER = re.compile(
+    r"(?<![\w.])"
+    r"[+-]?(?:\d+(?:,\d+)*(?:\.\d+)?|\.\d+)"
+    r"(?:[eE][+-]?\d+)?"
+    r"(?:%|[kKmMbB](?!\w))?"
+    r"(?!\w)"
+)
+_VALID_NUMBER = re.compile(
+    r"[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?"
+)
+_WORDS = re.compile(r"[A-Za-z]+")
+_CONNECTORS = frozenset("""
+    a an all amount amounts accounting after agreement agreements allocated
+    allocation allowance allowances amendments and answer applying are as at
+    attributable attributed balance be belongs by closing corrected corrections
+    credit credited credits custody damaged damage dollars earned earns eligible
+    equals exactly final findings for from gives has have in integer is it its
+    management may net of office offices only per receives reconciled
+    reconciliation recorded relevant responsibility result results s shipment
+    shipments signed stands sum summed the their therefore these this to total
+    totaled totaling totals units usd value was were with yields
+""".split())
+_ALTERNATIVES = frozenset(("or", "versus", "vs", "either"))
+_SCALE_SUFFIX = re.compile(
+    r"\s*(?:%|/|(?:thousand|million|billion|trillion|percent|per\s+cent)\b)",
+    re.IGNORECASE,
+)
+
+
+def _bridge_ok(fragment):
+    """Recognize ordinary label/value linking language, not answer evidence."""
+    words = _WORDS.findall(fragment.casefold())
+    return all(word in _CONNECTORS for word in words)
+
+
+def _full_matching(candidates, fixed=None):
+    """Match every numeric occurrence to a distinct label occurrence.
+
+    The graph is tiny for normal answers. This iterative augmenting-path
+    implementation avoids recursion and does not consult ground-truth values.
+    """
+    chosen = {}
+    owner = {}
+    fixed_number = None
+    if fixed is not None:
+        fixed_number, fixed_label = fixed
+        if fixed_label not in candidates[fixed_number]:
+            return None
+        chosen[fixed_number] = fixed_label
+        owner[fixed_label] = fixed_number
+
+    for start in range(len(candidates)):
+        if start in chosen:
+            continue
+        queue = [start]
+        seen_numbers = {start}
+        parent = {}
+        free_label = None
+        cursor = 0
+
+        while cursor < len(queue) and free_label is None:
+            number = queue[cursor]
+            cursor += 1
+            for label in candidates[number]:
+                if label in parent:
+                    continue
+                parent[label] = number
+                if label not in owner:
+                    free_label = label
+                    break
+                next_number = owner[label]
+                if (
+                    next_number != fixed_number
+                    and next_number not in seen_numbers
+                ):
+                    seen_numbers.add(next_number)
+                    queue.append(next_number)
+
+        if free_label is None:
+            return None
+
+        label = free_label
+        while label is not None:
+            number = parent[label]
+            previous_label = chosen.get(number)
+            chosen[number] = label
+            owner[label] = number
+            label = previous_label
+
+    return chosen
 
 
 def score(answer_text: str, truth) -> float:
-    """Accept JSON, Python dict notation, tables, lists, or labeled prose.
+    """Exact mapping agreement, tolerant of ordinary answer presentation.
 
-    Office order, letter case, ordinary punctuation, thousands commas, and
-    surrounding prose do not matter. Repeated conflicting labeled totals,
-    missing offices, and incorrect values fail. Hedges ("Alderwick: 5 or 7")
-    are detected by looking for two candidate numbers in the same label
-    segment, and any discrepancy caps the score at 0.0.
+    Accepts JSON (including currency strings), Python dictionaries, markdown,
+    tables, bullets, sentences, case changes, office suffixes, decimal zeros,
+    thousands separators, and either order of labels and amounts.
+
+    Extra explanatory prose is allowed. As the question requests, numeric
+    content must consist of labeled totals, not intermediate calculations.
+    Every numeric occurrence must have an unambiguous office association.
+    Alternatives and contradictory repetitions cannot be hidden in prose.
     """
     if not isinstance(answer_text, str) or not isinstance(truth, dict):
         return 0.0
@@ -633,165 +720,109 @@ def score(answer_text: str, truth) -> float:
     if any(type(value) is not int for value in truth.values()):
         return 0.0
 
-    text = answer_text.replace("\u2212", "-").replace("\u00a0", " ")
-    label_pattern = re.compile(
-        r"\b(" + "|".join(re.escape(name) for name in OFFICES) + r")\b",
-        re.IGNORECASE,
+    text = (
+        answer_text.replace("\u2212", "-")
+        .replace("\u00a0", " ")
+        .replace("\u202f", " ")
+        .replace("$", "")
     )
-    labels = list(label_pattern.finditer(text))
-    canonical = {name.casefold(): name for name in OFFICES}
-    observations = {name: [] for name in OFFICES}
+    labels = list(_LABEL.finditer(text))
+    numbers = list(_NUMBER.finditer(text))
+    if not labels or not numbers:
+        return 0.0
 
+    values = []
+    for number in numbers:
+        spelling = number.group()
+        if _VALID_NUMBER.fullmatch(spelling) is None:
+            return 0.0
+        if _SCALE_SUFFIX.match(text[number.end():]):
+            return 0.0
+        try:
+            value = Decimal(spelling.replace(",", ""))
+        except InvalidOperation:
+            return 0.0
+        if not value.is_finite() or value != value.to_integral_value():
+            return 0.0
+        values.append(value)
+
+    offices = [_CANONICAL[label.group().casefold()] for label in labels]
+
+    # Adjacent events determine possible associations. In a normal dictionary
+    # each number sits between two labels; matching resolves the direction
+    # without using the expected amounts as a parsing oracle.
+    events = []
     for index, label in enumerate(labels):
-        # Hedge detection only considers numbers within a tight proximity to
-        # the label (60 chars) - this captures "Alderwick: 5 or 7" while
-        # ignoring trailing prose like a "Note" line at the end of the
-        # answer that happens to contain digits.
-        next_start = labels[index + 1].start() if index + 1 < len(labels) else len(text)
-        end = min(next_start, label.end() + 60)
-        segment = text[label.end():end]
-        clean_candidate = None
-        hedged_other = False
-        invalid_primary_prefix = False
-        for number in _NUMBER.finditer(segment):
-            prefix = segment[:number.start()]
-            words = re.findall(r"[A-Za-z]+", prefix.casefold())
-            if any(word not in _CONNECTORS for word in words):
-                # Don't pin this number, and don't reject the whole answer
-                # unless we never got a primary.
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if re.search(r"[\d+-]", prefix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            suffix = segment[number.end():]
-            if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            try:
-                value = Decimal(number.group().replace(",", ""))
-            except InvalidOperation:
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if clean_candidate is None:
-                clean_candidate = value
-            else:
-                hedged_other = True
-        if invalid_primary_prefix and clean_candidate is None:
-            # Try a wider window in case the layout put the number farther on.
-            wider_segment = text[label.end():min(next_start, label.end() + 180)]
-            for number in _NUMBER.finditer(wider_segment):
-                prefix = wider_segment[:number.start()]
-                words = re.findall(r"[A-Za-z]+", prefix.casefold())
-                if any(word not in _CONNECTORS for word in words):
-                    continue
-                if re.search(r"[\d+-]", prefix):
-                    continue
-                suffix = wider_segment[number.end():]
-                if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                    continue
-                try:
-                    value = Decimal(number.group().replace(",", ""))
-                except InvalidOperation:
-                    continue
-                if clean_candidate is None:
-                    clean_candidate = value
-                else:
-                    hedged_other = True
-            if clean_candidate is None:
-                return 0.0
-        if clean_candidate is None:
+        events.append((label.start(), label.end(), "label", index))
+    for index, number in enumerate(numbers):
+        events.append((number.start(), number.end(), "number", index))
+    events.sort()
+
+    candidates = [[] for _ in numbers]
+    for left, right in zip(events, events[1:]):
+        gap = text[left[1]:right[0]]
+        words = _WORDS.findall(gap.casefold())
+
+        # Explicit choices between labels must not disappear just because
+        # the next label happens to have a valid total.
+        if (
+            any(word in _ALTERNATIVES for word in words)
+            and all(
+                word in _CONNECTORS or word in _ALTERNATIVES
+                for word in words
+            )
+        ):
+            return 0.0
+
+        if left[2] == right[2] or not _bridge_ok(gap):
             continue
-        office = canonical[label.group().casefold()]
-        observations[office].append(clean_candidate)
-        if hedged_other:
-            observations[office + "_hedge"] = True
+        if left[2] == "number":
+            candidates[left[3]].append(right[3])
+        else:
+            candidates[right[3]].append(left[3])
+
+    if any(not options for options in candidates):
+        return 0.0
+
+    matched = _full_matching(candidates)
+    if matched is None:
+        return 0.0
+
+    # Reject any alternative complete parsing that changes a number's office.
+    # Equivalent references to the same office are harmless.
+    for number, options in enumerate(candidates):
+        office = offices[matched[number]]
+        for label in options:
+            if offices[label] != office:
+                if _full_matching(candidates, (number, label)) is not None:
+                    return 0.0
+
+    observations = {office: [] for office in OFFICES}
+    for number in range(len(numbers)):
+        office = offices[matched[number]]
+        observations[office].append(values[number])
 
     for office, expected in truth.items():
-        values = observations[office]
-        if not values:
-            return 0.0
-        expected_dec = Decimal(expected)
-        if any(value != expected_dec for value in values):
+        observed = observations[office]
+        if not observed or any(value != Decimal(expected) for value in observed):
             return 0.0
     return 1.0
 
 
-if __name__ == "__main__":
-    for requested_size in ("small", "medium", "large"):
-        result = generate(0, requested_size)
-        truth = result["answer"]
-        print(
-            f"{requested_size}: {len(result['context']):,} characters; "
-            f"{len(result['context'].split()):,} whitespace-delimited words; "
-            f"{result['meta']['shipments']} shipments"
-        )
-        print("Question:", result["question"])
-        print("Truth:", json.dumps(truth, sort_keys=True))
+def _self_test(truth):
+    items = list(truth.items())
+    reversed_items = list(reversed(items))
+    plain = json.dumps(truth)
+    labeled = "; ".join(
+        f"{office} office: {amount}" for office, amount in items
+    )
 
-        assert score(str(truth), truth) == 1.0
-        assert score(json.dumps(truth), truth) == 1.0
-        formatted = "Reconciled results:\n" + "\n".join(
-            f"- {office.upper()} has {amount:,} credits."
-            for office, amount in reversed(list(truth.items()))
-        ) + "\nReconciliation complete."
-        assert score(formatted, truth) == 1.0
-
-        changed = {office: amount + 1 for office, amount in truth.items()}
-        missing = dict(truth)
-        missing.pop(OFFICES[0])
-        assert score(str(changed), truth) < 1.0
-        assert score(str(missing), truth) < 1.0
-        assert score("All offices earned the same amount.", truth) < 1.0
-        contradictory = (
-            str(truth) + f"\n{OFFICES[0]}: {truth[OFFICES[0]] + 1}"
-        )
-        assert score(contradictory, truth) < 1.0
-        print()
-
-    # Scorer regression for the formats the audit flagged.
-    for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        offs = list(truth)
-        positives = {
-            "json": json.dumps(truth),
-            "json_pretty": json.dumps(truth, indent=2),
-            "py_dict": str(truth),
-            "colon_lines": "\n".join(o + ": " + str(truth[o]) for o in offs),
-            "bullets_bold": "\n".join("- **" + o + "**: " + str(truth[o]) for o in offs),
-            "md_table": "| Office | Credits |\n|---|---|\n" + "\n".join("| " + o + " | " + str(truth[o]) + " |" for o in offs),
-            "credits_suffix": "\n".join(o + ": " + str(truth[o]) + " credits" for o in offs),
-            "office_word": "\n".join(o + " office: " + str(truth[o]) for o in offs),
-            "Office_label_json": json.dumps({o + " Office": truth[o] for o in offs}),
-            "prose_earned": "; ".join(o + " earned " + str(truth[o]) for o in offs) + ".",
-            "intro_list": ("Totals for Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst and Gorsehaven:\n"
-                           + "\n".join(o + ": " + str(truth[o]) for o in offs)),
-            "fenced_json": "```json\n" + json.dumps(truth, indent=2) + "\n```",
-            "equals": ", ".join(o + " = " + str(truth[o]) for o in offs),
-            "with_note_after": json.dumps(truth) + "\nNote: offices with no qualifying shipments are 0.",
-            "em_dash": "\n".join(o + " — " + str(truth[o]) for o in offs),
-            "zero_word_none": "\n".join(o + ": " + (str(truth[o]) if truth[o] else "0 (none)") for o in offs),
-            "paren_unit": "\n".join(o + ": " + str(truth[o]) + " (credits)" for o in offs),
-        }
-        for k, s in positives.items():
-            sc = score(s, truth)
-            assert sc == 1.0, f"SHODAN positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-        # Hedge detection: two different numbers after a label -> 0.0
-        if truth[offs[0]] != truth[offs[1]]:
-            h = offs[0] + ": " + str(truth[offs[0]]) + " or " + str(truth[offs[1]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
-            assert score(h, truth) < 1.0
-        # Negation: "Alderwick: not 5" -> 0.0
-        neg = offs[0] + ": not " + str(truth[offs[0]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
-        assert score(neg, truth) < 1.0
-        # Off by one
-        w = dict(truth); w[offs[0]] = truth[offs[0]] + 1
-        assert score(json.dumps(w), truth) < 1.0
-        # Missing office
-        m = dict(truth); m.pop(offs[-1])
-        assert score(json.dumps(m), truth) < 1.0
-    print("SHODAN: scorer regression battery PASS.")
+    correct_formats = [
+        str(truth),                          # Bare mapping value.
+        plain,
+        plain + ".",
+        "The answer is " + plain + ".",
+        "**" + plain + "**",
+        "*" + plain + "*",
+        '"' + plain + '"',
+        "

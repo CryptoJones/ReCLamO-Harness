@@ -1,3 +1,57 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 3: independent audit)
+
+An independent auditor solved your task from the text alone, then traced your generator, and ran 1,701 scorer probes. Findings for your current generator (below):
+
+**Scorer: (~172) gives 0.5 to a correct name in lowercase/uppercase or 'Patel, Priya'; (~189) gives 1.0 to answers listing two names or two amounts, and to an answer that first says 'no employee fits...' then hedges to the key. Also wording: the question asks about flags 'in the final audit summary' using labels ('duplicate receipts', 'policy violation (high-risk vendor)') that the summary words differently ('double-dipped invoices', 'non-compliant vendor', ~80-90), and 'flagged expenses' means the sum of ALL the culprit's transactions without saying so — align the labels and make the question say what is summed.**
+
+**SCORER FAIRNESS (applies to every task): score() must give 1.0 to a correct answer in any reasonable format — bare value, a sentence ('The answer is X.'), markdown bold/italics, quotes, bullet list, JSON, trailing period, case changes, numbers with/without $ and thousands commas, extra explanation before/after — and must give < 1.0 (ideally 0) to wrong answers AND to hedged answers that name more than one candidate (e.g. 'A or B', 'not X; it is Y' where X is wrong but listed, two names, two amounts). Add self-test asserts for these formats and hedges across seeds 0-4.**
+
+Return a corrected version that satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, stdlib only, valid Python 3.11 syntax: no backslashes inside f-string expressions). Keep the task idea and difficulty. Same deliverable format: one paragraph (what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 from collections import defaultdict
@@ -118,9 +172,9 @@ def generate(seed: int, size: str) -> dict:
     context = "".join(non_summary + [parts[-1]])
 
     question = (
-        "Which employee's expense report was the only one flagged for both "
-        "'double-dipped invoices' and 'non-compliant vendor' in the final audit summary, "
-        "and what was the total dollar amount of that employee's flagged expenses?"
+        "Which employee’s expense report was the only one flagged for both "
+        "'duplicate receipts' and 'policy violation (high-risk vendor)' in the final audit summary, "
+        "and what was the total amount of their flagged expenses?"
     )
     answer = (culprit, truth_amount)
 
@@ -137,27 +191,15 @@ def generate(seed: int, size: str) -> dict:
     }
 
 def score(answer_text: str, truth: tuple[str, int]) -> float:
-    """Robust scorer for MasterControl.
-
-    - 1.0 when the answer names the right employee AND states the right
-      total flagged-expense amount (in any reasonable format: bare number,
-      "$" prefix, comma separators, dollar sign, sentence form, etc.).
-    - 0.4 when only one of the two is correct.
-    - 0.3 when the answer hedges between two candidate employees or two
-      candidate amounts (even if the truth is among them).
-    - 0.0 when nothing of substance is found.
-    """
-    if not isinstance(answer_text, str):
-        return 0.0
     truth_name, truth_amount = truth
-    truth_name_low = truth_name.lower()
+    # Handle stringified tuple like "('Priya Patel', 39195)" or natural text
     text = answer_text.strip()
 
-    # Parse stringified tuple like "('Priya Patel', 39195)".
-    if text.startswith("(") and text.endswith(")"):
+    # Parse stringified tuple
+    if text.startswith('(') and text.endswith(')'):
         inner = text[1:-1].strip()
-        if "," in inner:
-            parts = [p.strip().strip("'\"") for p in inner.split(",", 1)]
+        if ',' in inner:
+            parts = [p.strip().strip("'\"") for p in inner.split(',', 1)]
             if len(parts) == 2:
                 candidate_name = parts[0]
                 try:
@@ -165,85 +207,45 @@ def score(answer_text: str, truth: tuple[str, int]) -> float:
                 except ValueError:
                     candidate_amount = None
                 if candidate_amount is not None:
-                    if (candidate_name.lower() == truth_name_low and
-                            candidate_amount == truth_amount):
+                    if (candidate_name.lower() == truth_name.lower() and
+                        candidate_amount == truth_amount):
                         return 1.0
 
-    # Find candidate names: any Title-Case multi-word phrase.
+    # Parse natural text: look for name and amount.
+    # NOTE 1: The name regex must be CASE-SENSITIVE. With re.IGNORECASE, a sentence such as
+    # "Priya Patel was the only employee flagged..." would have been matched as ONE giant
+    # "name" string ("Priya Patel was the only employee flagged"), and so a fully-correct
+    # answer (right name + right amount embedded in a sentence) would have gotten only 0.5
+    # -- because the captured "name" no longer equalled the truth name string.
+    # NOTE 2: The amount regex must capture the WHOLE digit run. The earlier `\d{1,3}`
+    # truncated an unformatted amount to its first three digits -- "39195" came out as
+    # "391" and "95" instead of "39195" -- so a fully-correct plain-text answer like
+    # "The answer is Priya Patel; total 39195." scored 0.5. Switching `\d{1,3}` to `\d+`
+    # keeps the comma-formatted path intact (`\d+(?:,\d{3})*` reads "39,195" as one match
+    # when the source uses comma separators) AND now reads unformatted totals intact too.
     name_pattern = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
-    name_candidates = [n for n in name_pattern.findall(answer_text)]
-    name_candidates_low = [n.lower() for n in name_candidates]
+    amount_pattern = re.compile(r"\$?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)")
 
-    # Find candidate amounts: allow $ prefix, comma separators, optional cents.
-    amount_pattern = re.compile(r"\$\s*(\d[\d,]*(?:\.\d{1,2})?)")
-    plain_amount_pattern = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{2,7}(?:\.\d{1,2})?)(?!\d)")
-    amount_values = []
-    for a in amount_pattern.findall(answer_text):
+    names = name_pattern.findall(answer_text)
+    amounts = amount_pattern.findall(answer_text)
+
+    name_ok = any(truth_name.lower() == n.lower() for n in names)
+    amount_ok = False
+    for a in amounts:
         try:
-            amount_values.append(round(float(a.replace(",", "")), 2))
+            parsed = float(re.sub(r"[^\d.]", "", a))
+            if abs(parsed - truth_amount) < 0.01:
+                amount_ok = True
+                break
         except ValueError:
             continue
-    for a in plain_amount_pattern.findall(answer_text):
-        try:
-            amount_values.append(round(float(a.replace(",", "")), 2))
-        except ValueError:
-            continue
 
-    name_match = any(n == truth_name_low for n in name_candidates_low)
-    name_lower_match = truth_name_low in answer_text.lower()
-    # "Last, First" forms: "Patel, Priya" - check reversed-name form.
-    parts_truth = truth_name_low.split()
-    name_reversed_match = False
-    if len(parts_truth) == 2:
-        reversed_form = parts_truth[1] + ", " + parts_truth[0]
-        name_reversed_match = reversed_form in answer_text.lower()
-    name_ok = name_match or name_lower_match or name_reversed_match
-
-    amount_match = any(abs(v - truth_amount) < 0.01 for v in amount_values)
-    amount_ok = amount_match
-
-    # Hedge word detection: "either ... or", "alternatively", "possibly", etc.
-    hedge_word_pattern = re.compile(
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|likely|"
-        r"could be|might be)\b",
-        re.IGNORECASE,
-    )
-    has_hedge_word = bool(hedge_word_pattern.search(answer_text))
-
-    # Hedge detection: multiple distinct candidate names, or multiple
-    # distinct candidate amounts.
-    distinct_names = set()
-    for n in name_candidates_low:
-        if " " in n:
-            distinct_names.add(n)
-    name_hedge = (
-        len(distinct_names) >= 2
-        and truth_name_low not in distinct_names
-    ) or (
-        len(distinct_names) >= 3
-    )
-    distinct_amounts = {
-        int(round(v)) for v in amount_values if v >= 100
-    }
-    amount_hedge = (
-        len(distinct_amounts) >= 2
-        and truth_amount not in distinct_amounts
-    ) or (
-        len(distinct_amounts) >= 3
-    )
-    # A hedge word near a competing candidate forces a hedge decision.
-    if has_hedge_word and (len(distinct_names) >= 2 or len(distinct_amounts) >= 2):
-        name_hedge = name_hedge or len(distinct_names) >= 2
-        amount_hedge = amount_hedge or len(distinct_amounts) >= 2
-    any_hedge = name_hedge or amount_hedge
-
-    if name_ok and amount_ok and not any_hedge:
+    if name_ok and amount_ok:
         return 1.0
-    if any_hedge and (name_ok or amount_ok):
-        return 0.3
-    if name_ok or amount_ok:
-        return 0.4
-    return 0.0
+    elif name_ok or amount_ok:
+        return 0.5
+    else:
+        return 0.0
 
 if __name__ == "__main__":
     for size in ["small", "medium", "large"]:
@@ -357,44 +359,4 @@ if __name__ == "__main__":
     print("MasterControl: raw/unformatted-amount assertions PASS "
           "(name + plain total = 1.0; wrong name or wrong amount < 1.0).")
 
-    # ----- Scorer regression: formats and hedges -----
-    emps = ["Lena Carter", "Marcus Boone", "Priya Patel", "Ethan Nguyen", "Sophia Lee"]
-    for seed in range(5):
-        d = generate(seed, "small")
-        n, amt = d["answer"]
-        other = [e for e in emps if e != n][0]
-        positives = {
-            "str_tuple": str(d["answer"]),
-            "sentence_comma": f"{n} had total flagged expenses of ${amt:,}.",
-            "sentence_bare": f"{n} had total flagged expenses of {amt}.",
-            "sentence_no_comma": f"{n} had total flagged expenses of ${amt}.",
-            "sentence_cents": f"{n} had total flagged expenses of ${amt}.00.",
-            "sentence_usd": f"{n} had total flagged expenses of ${amt:,}.00 USD.",
-            "bold": f"**{n}** — **${amt:,}**",
-            "json": f'{{"employee": "{n}", "total": {amt}}}',
-            "bullets": f"- Employee: {n}\n- Total flagged: ${amt:,}",
-            "lowercase": f"{n.lower()}, ${amt:,}",
-            "uppercase": f"{n.upper()}: ${amt:,}",
-            "last_first": f"{n.split()[-1]}, {n.split()[0]} — ${amt:,}",
-            "dollars_word": f"{n}; {amt:,} dollars",
-            "explanation_with_other_numbers":
-                f"{n} had 3 flagged reports in Q4 2024 totaling ${amt:,}.",
-            "trailing_period": f"{n}, ${amt:,}.",
-            "sentence_question": f"The only flagged employee is {n} with ${amt:,}.",
-        }
-        for k, s in positives.items():
-            sc = score(s, d["answer"])
-            assert sc == 1.0, (
-                f"MasterControl positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-            )
-        # Hedged forms must score < 1.0.
-        hedges = {
-            "shotgun_names": f"Either {other} or {n}; ${amt:,}",
-            "shotgun_amounts": f"{n}; ${amt - 1000:,} or ${amt:,}",
-        }
-        for k, s in hedges.items():
-            sc = score(s, d["answer"])
-            assert sc < 1.0, (
-                f"MasterControl hedge {k!r} should score < 1.0 (seed={seed}); got {sc}"
-            )
-    print("MasterControl: scorer regression battery PASS (formats in/hedges out).")
+```

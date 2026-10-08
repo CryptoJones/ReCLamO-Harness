@@ -1,3 +1,57 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 3: independent audit)
+
+An independent auditor solved your task from the text alone, then traced your generator, and ran 1,701 scorer probes. Findings for your current generator (below):
+
+**Scorer: (~612-615, ~654) gives 0 to 'Alderwick office: 0' and to JSON keys like 'Alderwick Office'. (Answer key verified sound; do not change generation.)**
+
+**SCORER FAIRNESS (applies to every task): score() must give 1.0 to a correct answer in any reasonable format — bare value, a sentence ('The answer is X.'), markdown bold/italics, quotes, bullet list, JSON, trailing period, case changes, numbers with/without $ and thousands commas, extra explanation before/after — and must give < 1.0 (ideally 0) to wrong answers AND to hedged answers that name more than one candidate (e.g. 'A or B', 'not X; it is Y' where X is wrong but listed, two names, two amounts). Add self-test asserts for these formats and hedges across seeds 0-4.**
+
+Return a corrected version that satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, stdlib only, valid Python 3.11 syntax: no backslashes inside f-string expressions). Keep the task idea and difficulty. Same deliverable format: one paragraph (what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 """Independent long-context freight reconciliation benchmark. Python 3.11.
 
 Why keyword search, regex extraction, or surface counting is insufficient:
@@ -612,8 +666,7 @@ _NUMBER = re.compile(
 _CONNECTORS = {
     "a", "an", "and", "at", "balance", "closing", "credit", "credits",
     "earned", "earns", "equals", "final", "for", "has", "is", "net",
-    "of", "office", "receives", "stands", "the", "to", "total", "totals",
-    "units",
+    "of", "receives", "stands", "the", "to", "total", "totals", "units",
 }
 
 
@@ -622,9 +675,8 @@ def score(answer_text: str, truth) -> float:
 
     Office order, letter case, ordinary punctuation, thousands commas, and
     surrounding prose do not matter. Repeated conflicting labeled totals,
-    missing offices, and incorrect values fail. Hedges ("Alderwick: 5 or 7")
-    are detected by looking for two candidate numbers in the same label
-    segment, and any discrepancy caps the score at 0.0.
+    missing offices, and incorrect values fail. No model or external service
+    is used. As requested in the question, totals must follow their labels.
     """
     if not isinstance(answer_text, str) or not isinstance(truth, dict):
         return 0.0
@@ -643,80 +695,36 @@ def score(answer_text: str, truth) -> float:
     observations = {name: [] for name in OFFICES}
 
     for index, label in enumerate(labels):
-        # Hedge detection only considers numbers within a tight proximity to
-        # the label (60 chars) - this captures "Alderwick: 5 or 7" while
-        # ignoring trailing prose like a "Note" line at the end of the
-        # answer that happens to contain digits.
-        next_start = labels[index + 1].start() if index + 1 < len(labels) else len(text)
-        end = min(next_start, label.end() + 60)
-        segment = text[label.end():end]
-        clean_candidate = None
-        hedged_other = False
-        invalid_primary_prefix = False
-        for number in _NUMBER.finditer(segment):
-            prefix = segment[:number.start()]
-            words = re.findall(r"[A-Za-z]+", prefix.casefold())
-            if any(word not in _CONNECTORS for word in words):
-                # Don't pin this number, and don't reject the whole answer
-                # unless we never got a primary.
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if re.search(r"[\d+-]", prefix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            suffix = segment[number.end():]
-            if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            try:
-                value = Decimal(number.group().replace(",", ""))
-            except InvalidOperation:
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if clean_candidate is None:
-                clean_candidate = value
-            else:
-                hedged_other = True
-        if invalid_primary_prefix and clean_candidate is None:
-            # Try a wider window in case the layout put the number farther on.
-            wider_segment = text[label.end():min(next_start, label.end() + 180)]
-            for number in _NUMBER.finditer(wider_segment):
-                prefix = wider_segment[:number.start()]
-                words = re.findall(r"[A-Za-z]+", prefix.casefold())
-                if any(word not in _CONNECTORS for word in words):
-                    continue
-                if re.search(r"[\d+-]", prefix):
-                    continue
-                suffix = wider_segment[number.end():]
-                if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                    continue
-                try:
-                    value = Decimal(number.group().replace(",", ""))
-                except InvalidOperation:
-                    continue
-                if clean_candidate is None:
-                    clean_candidate = value
-                else:
-                    hedged_other = True
-            if clean_candidate is None:
-                return 0.0
-        if clean_candidate is None:
+        end = labels[index + 1].start() if index + 1 < len(labels) else len(text)
+        # A stated total should be near its label. This also prevents a label
+        # in a distant introduction from capturing an unrelated prose number.
+        segment = text[label.end():min(end, label.end() + 180)]
+        number = _NUMBER.search(segment)
+        if number is None:
             continue
+
+        prefix = segment[:number.start()]
+        words = re.findall(r"[A-Za-z]+", prefix.casefold())
+        if any(word not in _CONNECTORS for word in words):
+            # Do not interpret "not 123", "approximately 123", etc. as a total.
+            return 0.0
+        # Reject number formats the parser would otherwise partially consume.
+        if re.search(r"[\d+-]", prefix):
+            return 0.0
+        suffix = segment[number.end():]
+        if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
+            return 0.0
+
+        try:
+            value = Decimal(number.group().replace(",", ""))
+        except InvalidOperation:
+            return 0.0
         office = canonical[label.group().casefold()]
-        observations[office].append(clean_candidate)
-        if hedged_other:
-            observations[office + "_hedge"] = True
+        observations[office].append(value)
 
     for office, expected in truth.items():
         values = observations[office]
-        if not values:
-            return 0.0
-        expected_dec = Decimal(expected)
-        if any(value != expected_dec for value in values):
+        if not values or any(value != Decimal(expected) for value in values):
             return 0.0
     return 1.0
 
@@ -753,45 +761,4 @@ if __name__ == "__main__":
         assert score(contradictory, truth) < 1.0
         print()
 
-    # Scorer regression for the formats the audit flagged.
-    for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        offs = list(truth)
-        positives = {
-            "json": json.dumps(truth),
-            "json_pretty": json.dumps(truth, indent=2),
-            "py_dict": str(truth),
-            "colon_lines": "\n".join(o + ": " + str(truth[o]) for o in offs),
-            "bullets_bold": "\n".join("- **" + o + "**: " + str(truth[o]) for o in offs),
-            "md_table": "| Office | Credits |\n|---|---|\n" + "\n".join("| " + o + " | " + str(truth[o]) + " |" for o in offs),
-            "credits_suffix": "\n".join(o + ": " + str(truth[o]) + " credits" for o in offs),
-            "office_word": "\n".join(o + " office: " + str(truth[o]) for o in offs),
-            "Office_label_json": json.dumps({o + " Office": truth[o] for o in offs}),
-            "prose_earned": "; ".join(o + " earned " + str(truth[o]) for o in offs) + ".",
-            "intro_list": ("Totals for Alderwick, Brindleford, Cairnstead, Dunmere, Elmbridge, Fenhurst and Gorsehaven:\n"
-                           + "\n".join(o + ": " + str(truth[o]) for o in offs)),
-            "fenced_json": "```json\n" + json.dumps(truth, indent=2) + "\n```",
-            "equals": ", ".join(o + " = " + str(truth[o]) for o in offs),
-            "with_note_after": json.dumps(truth) + "\nNote: offices with no qualifying shipments are 0.",
-            "em_dash": "\n".join(o + " — " + str(truth[o]) for o in offs),
-            "zero_word_none": "\n".join(o + ": " + (str(truth[o]) if truth[o] else "0 (none)") for o in offs),
-            "paren_unit": "\n".join(o + ": " + str(truth[o]) + " (credits)" for o in offs),
-        }
-        for k, s in positives.items():
-            sc = score(s, truth)
-            assert sc == 1.0, f"SHODAN positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-        # Hedge detection: two different numbers after a label -> 0.0
-        if truth[offs[0]] != truth[offs[1]]:
-            h = offs[0] + ": " + str(truth[offs[0]]) + " or " + str(truth[offs[1]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
-            assert score(h, truth) < 1.0
-        # Negation: "Alderwick: not 5" -> 0.0
-        neg = offs[0] + ": not " + str(truth[offs[0]]) + "\n" + offs[1] + ": " + str(truth[offs[1]])
-        assert score(neg, truth) < 1.0
-        # Off by one
-        w = dict(truth); w[offs[0]] = truth[offs[0]] + 1
-        assert score(json.dumps(w), truth) < 1.0
-        # Missing office
-        m = dict(truth); m.pop(offs[-1])
-        assert score(json.dumps(m), truth) < 1.0
-    print("SHODAN: scorer regression battery PASS.")
+```
