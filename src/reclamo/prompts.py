@@ -11,6 +11,24 @@ OpenAI-style functions, ``execute_python`` and ``final_answer``
 (``tool_specs``). Its system prompt keeps the same data, batching and
 decomposition guidance; only the "how to act" parts differ. The fence prompt is
 unchanged.
+
+Prompt versions (``prompt_version``, issue #59). ``"v0.1"`` is the prompt the
+published results used, kept byte for byte. ``"v0.2"`` (the default) follows the
+paper's main prompt and upstream's current one on delegation:
+
+* It encourages sub-calls instead of warning against them. The paper's main prompt
+  (arXiv 2512.24601, App. C.1 (1a)) says sub-LLMs are "strongly encouraged to use as
+  much as possible" and "don't be afraid to put a lot of context into them". Its
+  "IMPORTANT: Be very careful about using `llm_query`" line ((1b), (1d)) was added
+  because Qwen3-Coder made "thousands of LM subcalls for basic tasks" (App. C).
+  Our models under-call: 7 of 40 rlm rows in the #22 re-run made any sub-call.
+  The hard caps stay, stated as facts.
+* It adds upstream's "act as an orchestrator, not a solver" addendum, lightly
+  adapted (``ORCHESTRATOR_V02`` below, with its license notice).
+* It adds a chained example (a running buffer carried from call to call, the
+  paper's book example) and a map-then-aggregate example.
+* It advertises a per-call size derived from the sub model's window
+  (``RLMConfig.effective_subcall_chars``), not a fixed 12K.
 """
 
 from __future__ import annotations
@@ -20,15 +38,37 @@ from dataclasses import dataclass
 from typing import Any
 
 _MAX_CHUNKS_SHOWN = 10
+PROMPT_VERSIONS = ("v0.1", "v0.2")
+DEFAULT_SUBCALL_CHARS = 12_000  # v0.1's fixed per-call size hint
 
 
 @dataclass(frozen=True)
 class PromptSettings:
-    """The two knobs the prompt reads. ``RLMConfig`` carries the same names."""
+    """The knobs the prompt reads. ``RLMConfig`` carries the same names."""
 
-    subcall_chars: int = 12_000
+    subcall_chars: int = DEFAULT_SUBCALL_CHARS
     max_depth: int = 1
     concurrency: int = 1
+    prompt_version: str = "v0.2"
+    max_subcalls_per_run: int = 64
+    max_subcalls_per_exec: int = 24
+
+
+def subcall_chars_of(settings: object) -> int:
+    """The per-call size the prompt advertises: ``RLMConfig.effective_subcall_chars``
+    when present, else a plain ``subcall_chars`` attribute, else 12,000."""
+    effective = getattr(settings, "effective_subcall_chars", None)
+    if effective is not None:
+        return int(effective)
+    value = getattr(settings, "subcall_chars", None)
+    return int(value) if value is not None else DEFAULT_SUBCALL_CHARS
+
+
+def prompt_version_of(settings: object) -> str:
+    version = str(getattr(settings, "prompt_version", "v0.2"))
+    if version not in PROMPT_VERSIONS:
+        raise ValueError(f"prompt_version must be one of {', '.join(PROMPT_VERSIONS)}")
+    return version
 
 
 @dataclass(frozen=True)
@@ -51,7 +91,12 @@ class ContextMeta:
         return f"{line} It has {len(self.chunk_lengths)} chunks with lengths: {lengths}."
 
 
-def _tools_section(subcall_chars: int, recursive: bool) -> str:
+def _tools_section(subcall_chars: int, recursive: bool, version: str = "v0.1") -> str:
+    size = (
+        f"Keep each prompt under about {subcall_chars:,} characters."
+        if version == "v0.1"
+        else f"One call can read about {subcall_chars:,} characters."
+    )
     lines = [
         "## Tools inside the REPL",
         "",
@@ -59,7 +104,7 @@ def _tools_section(subcall_chars: int, recursive: bool) -> str:
         "print all of it.",
         "- `llm_query(prompt: str) -> str`: ask a fresh language model one question. "
         "It sees only `prompt`, nothing from this conversation, so put the relevant "
-        f"text in the prompt. Keep each prompt under about {subcall_chars:,} characters.",
+        f"text in the prompt. {size}",
         "- `llm_query_batched(prompts: list[str]) -> list[str]`: the same, for several "
         "prompts; answers come back in the same order.",
         "- `SHOW_VARS()`: list the variables you have created so far and their types.",
@@ -136,6 +181,169 @@ def _examples_section(subcall_chars: int, recursive: bool = False) -> str:
     )
 
 
+# --- v0.2 (issue #59) ---------------------------------------------------------
+
+
+def _subcalls_section_v02(
+    subcall_chars: int, context_chars: int, concurrency: int, per_exec: int, per_run: int
+) -> str:
+    """Encouragement in place of v0.1's "sub-calls are expensive" (App. C.1 (1a)),
+    then the hard caps as plain facts."""
+    pace = "one call at a time" if concurrency <= 1 else f"up to {concurrency} calls at a time"
+    fits = (
+        f" The whole `context` ({context_chars:,} characters) fits in a single call."
+        if 0 < context_chars <= subcall_chars
+        else ""
+    )
+    return (
+        "## Sub-calls\n"
+        "\n"
+        "A sub-call reads and interprets text; keyword search and regex can only match "
+        f"it. Each call can read about {subcall_chars:,} characters, so don't be afraid to "
+        "put a lot of context into one call: a whole section, or many records at once, "
+        "rather than one record per call. Analyze your data and see if it is sufficient "
+        f"to just fit it in a few sub-LLM calls.{fits}\n"
+        "\n"
+        f"Hard limits, for planning: sub-calls run {pace}, with at most {per_exec} per "
+        f"code block and {per_run} per run."
+    )
+
+
+# The paragraphs below are adapted from ``ORCHESTRATOR_ADDENDUM`` in
+# alexzhang13/rlm ``rlm/utils/prompts.py`` (main, commit d04208a; added in de762b9,
+# 2026-05-24, and on by default via ``build_rlm_system_prompt(orchestrator=True)``).
+# Edits: the finishing step names no specific mechanism (we accept FINAL, FINAL_VAR,
+# the answer dict or final_answer); sub-LLMs see "the prompt you pass them" (our
+# llm_query has no context argument); upstream's fixed "~100K characters per prompt"
+# and "~20 prompts per batch" ceilings become this run's per-call size and per-run cap.
+#
+#     alexzhang13/rlm, MIT License
+#     Copyright (c) 2026 Alex Zhang
+#
+#     Permission is hereby granted, free of charge, to any person obtaining a copy
+#     of this software and associated documentation files (the "Software"), to deal
+#     in the Software without restriction, including without limitation the rights
+#     to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+#     copies of the Software, and to permit persons to whom the Software is
+#     furnished to do so, subject to the following conditions:
+#
+#     The above copyright notice and this permission notice shall be included in all
+#     copies or substantial portions of the Software.
+#
+#     THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+#     IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+#     FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+#     AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+#     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+#     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+#     SOFTWARE.
+def _orchestrator_section_v02(per_run: int) -> str:
+    return "\n\n".join(
+        [
+            "## Work as an orchestrator, not a solver",
+            (
+                "Directly after you probe `context` and understand your task, pause and "
+                "plan: state explicitly how the task decomposes into sub-LLM / REPL steps, "
+                "and sketch the concrete sequence of turns (what each turn computes and "
+                "which sub-LLM call, if any, it issues) before you execute them. Then "
+                "execute one turn at a time: after each step print a small sample of the "
+                "result, verify it looks right, and only finish once you have actually "
+                "printed the candidate answer. If you are running out of turns without a "
+                "confirmed answer, submit your best inference rather than letting the run "
+                "end unsubmitted."
+            ),
+            (
+                "Push every long-context operation that would not fit comfortably in your "
+                "own working window (reading, summarizing, classifying, verifying, "
+                "answering sub-questions, even recapping your own progress) into "
+                "`llm_query` / `llm_query_batched` calls instead of pulling that text into "
+                "your own messages. (Conversely: if a Python keyword / regex search over "
+                "`context` would already pin the answer, or if a single visible passage "
+                "already contains it, just read it directly; sub-LLMs are for when the raw "
+                "text won't fit or the question needs semantic interpretation.) Long REPL "
+                "output pollutes your history the same way raw `context` does: if you want "
+                "a recap, ask `llm_query` for a 1-2 sentence summary and print only that. "
+                "Aggregate the small results back in the REPL."
+            ),
+            (
+                "Sub-LLMs have no REPL; they only see the prompt you pass them. Hand them "
+                "clean, focused inputs and ask for terse, structured outputs you can "
+                "manipulate programmatically."
+            ),
+            (
+                "Pack each prompt close to the per-call size above (a chunk of many items, "
+                "a whole document) so one call accomplishes a lot of work; tiny one-item "
+                "prompts are the anti-pattern. When the work can be expressed either as a "
+                "sequential loop of `llm_query`s or as one `llm_query_batched` call, prefer "
+                "batched: same total work, fewer turns. If the work would need more than "
+                f"{per_run} calls, filter in Python first to a tractable subset, or stage "
+                "it: a coarse pass narrows candidates, then a targeted second pass extracts "
+                "from the survivors."
+            ),
+            (
+                "Reserve your own tokens for high-level decisions: what to ask next, how to "
+                "combine sub-LLM outputs, when to finalize. Delegate everything else."
+            ),
+        ]
+    )
+
+
+def _examples_section_v02(subcall_chars: int, recursive: bool = False) -> str:
+    """Three strategies: one big call, map then aggregate, and a running buffer (the
+    paper's book example, App. C.1 (1a), with its undefined ``buffers`` fixed)."""
+    recursion = (
+        "\n\n"
+        "Delegate, when the parts are large and independent and recursion is allowed:\n"
+        "\n"
+        "```repl\n"
+        "question = 'How many lines of this log mention a refund? Reply with just the number.'\n"
+        "per_part = {name: rlm_query(question, text) for name, text in context.items()}\n"
+        "print(per_part)\n"
+        "```"
+        if recursive
+        else ""
+    )
+    return (
+        "## Ways to decompose\n"
+        "\n"
+        "One call, when the data fits in a single sub-call:\n"
+        "\n"
+        "```repl\n"
+        "reply = llm_query(f'Using only this document, when is the launch date? Quote the "
+        "line.\\n\\n{context}')\n"
+        "print(reply[:500])\n"
+        "```\n"
+        "\n"
+        "Map over chunks, then aggregate the per-chunk answers with one more call:\n"
+        "\n"
+        "```repl\n"
+        f"size = {subcall_chars}\n"
+        "chunks = [context[i : i + size] for i in range(0, len(context), size)]\n"
+        "question = 'How many tickets ask for a refund?'\n"
+        "per_chunk = llm_query_batched([f'{question} Give a number and one line of "
+        "evidence.\\n\\n{c}' for c in chunks])\n"
+        "parts = '\\n'.join(f'Part {i}: {a}' for i, a in enumerate(per_chunk))\n"
+        "total = llm_query(f'{question}\\nThese are answers for {len(chunks)} parts of the "
+        "data. Combine them into one final answer.\\n\\n{parts}')\n"
+        "print(total)\n"
+        "```\n"
+        "\n"
+        "Carry a running buffer, when later parts can change what earlier parts said:\n"
+        "\n"
+        "```repl\n"
+        "import re\n"
+        "sections = re.split(r'(?m)^## ', context)[1:]\n"
+        "question = 'Who owns the Atlas project at the end, after all transfers?'\n"
+        "notes = 'nothing yet'\n"
+        "for i, s in enumerate(sections):\n"
+        "    notes = llm_query(f'You are reading section {i + 1} of {len(sections)} in "
+        "order. Question: {question}\\nNotes so far: {notes}\\nUpdate the notes with "
+        "anything here that bears on the question. Keep them short.\\n\\n{s}')\n"
+        "print(notes[:500])\n"
+        "```" + recursion
+    )
+
+
 def _rules_section() -> str:
     return (
         "## Rules\n"
@@ -163,9 +371,10 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
     ``settings`` only needs ``subcall_chars`` and ``max_depth`` attributes, so
     ``RLMConfig`` can be passed in directly.
     """
-    subcall_chars = int(getattr(settings, "subcall_chars", 12_000))
+    subcall_chars = subcall_chars_of(settings)
     max_depth = int(getattr(settings, "max_depth", 1))
     concurrency = int(getattr(settings, "concurrency", 1))
+    version = prompt_version_of(settings)
     recursive = max_depth > 1
 
     intro = (
@@ -173,23 +382,65 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
         "data lives in a Python REPL as the variable `context`; you never see it "
         "directly. You work in turns: each turn you write one block of Python, the REPL "
         "runs it and shows you the output, and you decide the next step. Variables "
-        "persist between turns. Inside the REPL you can ask a separate language model to "
-        "read a piece of the data for you.\n"
+        "persist between turns. " + _ask_line(version) + "\n"
         "\n"
         "Your own context window is small. Treat it as a scratchpad for decisions, and "
         "keep the data and the intermediate results in REPL variables."
     )
 
-    parts = [
-        intro,
-        "## The data",
-        context_meta.render(),
-        _tools_section(subcall_chars, recursive),
-        _batching_section(subcall_chars, concurrency),
-        _examples_section(subcall_chars, recursive),
-        _rules_section(),
-    ]
+    if version == "v0.1":
+        parts = [
+            intro,
+            "## The data",
+            context_meta.render(),
+            _tools_section(subcall_chars, recursive),
+            _batching_section(subcall_chars, concurrency),
+            _examples_section(subcall_chars, recursive),
+            _rules_section(),
+        ]
+    else:
+        parts = [
+            intro,
+            "## The data",
+            context_meta.render(),
+            _tools_section(subcall_chars, recursive, version),
+            _v02_subcalls(settings, subcall_chars, context_meta, concurrency),
+            _orchestrator_section_v02(_caps(settings)[1]),
+            _examples_section_v02(subcall_chars, recursive),
+            _rules_section(),
+        ]
     return "\n\n".join(parts) + "\n"
+
+
+def _ask_line(version: str) -> str:
+    if version == "v0.1":
+        return (
+            "Inside the REPL you can ask a separate language model to read a piece of "
+            "the data for you."
+        )
+    # App. C.1 (1a): "... recursively query sub-LLMs, which you are strongly
+    # encouraged to use as much as possible."
+    return (
+        "Inside the REPL you can ask separate language models (sub-LLMs) to read the "
+        "data for you, and you are strongly encouraged to use them as much as possible."
+    )
+
+
+def _caps(settings: object) -> tuple[int, int]:
+    """(per code block, per run) sub-call caps."""
+    return (
+        int(getattr(settings, "max_subcalls_per_exec", 24)),
+        int(getattr(settings, "max_subcalls_per_run", 64)),
+    )
+
+
+def _v02_subcalls(
+    settings: object, subcall_chars: int, context_meta: ContextMeta, concurrency: int
+) -> str:
+    per_exec, per_run = _caps(settings)
+    return _subcalls_section_v02(
+        subcall_chars, context_meta.total_chars, concurrency, per_exec, per_run
+    )
 
 
 def turn_prompt(i: int, n: int, first: bool = False, protocol: str = "fence") -> str:
@@ -204,12 +455,21 @@ def turn_prompt(i: int, n: int, first: bool = False, protocol: str = "fence") ->
     return line
 
 
-def decompose_nudge() -> str:
+def decompose_nudge(version: str = "v0.1", context_chars: int = 0, subcall_chars: int = 0) -> str:
+    """Sent when one sub-call got nearly the whole context and the context is larger
+    than one call can read (the loop never sends it when the context fits)."""
+    if version == "v0.1":
+        return (
+            "Your last code handed nearly the whole context to a single sub-call. That "
+            "defeats the purpose: the sub-model has the same limits you do. Split the "
+            "context into pieces and ask about each piece, then combine the results in "
+            "a variable."
+        )
     return (
-        "Your last code handed nearly the whole context to a single sub-call. That "
-        "defeats the purpose: the sub-model has the same limits you do. Split the "
-        "context into pieces and ask about each piece, then combine the results in "
-        "a variable."
+        f"Your last code handed nearly the whole context ({context_chars:,} characters) "
+        f"to a single sub-call, more than one call can read (about {subcall_chars:,} "
+        "characters). Split the context into pieces of up to that size, ask about each "
+        "piece, then combine the results, with one more sub-call if needed."
     )
 
 
@@ -377,8 +637,8 @@ def _as_tool_examples(text: str) -> str:
     return _FENCED.sub(sub, text)
 
 
-def _tools_protocol_section(subcall_chars: int, recursive: bool) -> str:
-    section = _tools_section(subcall_chars, recursive)
+def _tools_protocol_section(subcall_chars: int, recursive: bool, version: str = "v0.1") -> str:
+    section = _tools_section(subcall_chars, recursive, version)
     return section.replace(
         "to finish, as an alternative to FINAL / FINAL_VAR below.",
         "to finish, as an alternative to calling final_answer.",
@@ -409,9 +669,10 @@ def _tools_rules_section() -> str:
 
 def build_tools_system_prompt(settings: PromptSettings | object, context_meta: ContextMeta) -> str:
     """The system prompt for ``protocol="tools"``: same guidance, tools instead of fences."""
-    subcall_chars = int(getattr(settings, "subcall_chars", 12_000))
+    subcall_chars = subcall_chars_of(settings)
     max_depth = int(getattr(settings, "max_depth", 1))
     concurrency = int(getattr(settings, "concurrency", 1))
+    version = prompt_version_of(settings)
     recursive = max_depth > 1
 
     intro = (
@@ -420,25 +681,39 @@ def build_tools_system_prompt(settings: PromptSettings | object, context_meta: C
         "directly. You have two tools. `execute_python(code)` runs code in that REPL and "
         "returns its printed output. `final_answer(answer=... | variable=...)` ends the "
         "task. You work in turns: each turn you call execute_python once, read the "
-        "output, and decide the next step. Variables persist between turns. Inside the "
-        "REPL you can ask a separate language model to read a piece of the data for you.\n"
+        "output, and decide the next step. Variables persist between turns. "
+        + _ask_line(version)
+        + "\n"
         "\n"
         "Your own context window is small. Treat it as a scratchpad for decisions, and "
         "keep the data and the intermediate results in REPL variables."
     )
-    parts = [
-        intro,
-        "## The data",
-        context_meta.render(),
-        _tools_protocol_section(subcall_chars, recursive),
-        _batching_section(subcall_chars, concurrency),
-        _as_tool_examples(_examples_section(subcall_chars, recursive)),
-        _tools_rules_section(),
-    ]
+    if version == "v0.1":
+        parts = [
+            intro,
+            "## The data",
+            context_meta.render(),
+            _tools_protocol_section(subcall_chars, recursive),
+            _batching_section(subcall_chars, concurrency),
+            _as_tool_examples(_examples_section(subcall_chars, recursive)),
+            _tools_rules_section(),
+        ]
+    else:
+        parts = [
+            intro,
+            "## The data",
+            context_meta.render(),
+            _tools_protocol_section(subcall_chars, recursive, version),
+            _v02_subcalls(settings, subcall_chars, context_meta, concurrency),
+            _orchestrator_section_v02(_caps(settings)[1]),
+            _as_tool_examples(_examples_section_v02(subcall_chars, recursive)),
+            _tools_rules_section(),
+        ]
     return "\n\n".join(parts) + "\n"
 
 
 __all__ = [
+    "PROMPT_VERSIONS",
     "ContextMeta",
     "PromptSettings",
     "build_system_prompt",
@@ -450,5 +725,6 @@ __all__ = [
     "final_rejection",
     "forced_final_prompt",
     "reverify_nudge",
+    "subcall_chars_of",
     "turn_prompt",
 ]

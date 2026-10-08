@@ -40,6 +40,18 @@ PROTOCOLS = ("fence", "tools")
 # alexzhang13/rlm v1.0.0 scaffold that mit-oasys/rlm-qwen3-8b-v0.1 was trained on
 # (issue #43, see upstream.py).
 PLANNER_STYLES = ("reclamo", "upstream-rlm-v0")
+# The reclamo root prompt's version (issue #59): "v0.1" reproduces the published
+# results byte for byte, "v0.2" follows the paper's main prompt on delegation.
+PROMPT_VERSIONS = ("v0.1", "v0.2")
+DEFAULT_PROMPT_VERSION = "v0.2"
+# v0.1's fixed per-call size hint, and how v0.2 derives one from the sub model's
+# window when ``subcall_chars`` is unset: (window - sub max_tokens) tokens, less a
+# margin for the question and wrapper text, at a conservative 3 chars per token
+# (digit-heavy text runs near one token per character; plain prose near 4).
+V01_SUBCALL_CHARS = 12_000
+SUBCALL_MARGIN = 0.15
+SUBCALL_CHARS_PER_TOKEN = 3.0
+MIN_SUBCALL_CHARS = 4_000
 
 # Qwen3 sampling presets from the model card; top_k and min_p are non-standard
 # parameters and travel to the server in the request body's top level via
@@ -108,6 +120,9 @@ class ModelConfig:
     api_key_env: str | None = None
     api_key_cmd: str | None = None
     concurrency: int | None = None
+    # This role's context window in tokens; None = the profile's context_tokens.
+    # Only the sub role's is read today (the per-call size v0.2 advertises).
+    context_tokens: int | None = None
 
 
 @dataclass(frozen=True)
@@ -135,7 +150,10 @@ class RLMConfig:
     api_key_cmd: str | None = None
     concurrency: int = 1
     context_tokens: int = 32768
-    subcall_chars: int = 12_000
+    # Per-call size the prompt advertises, in characters. None = derived from the sub
+    # model's window under prompt_version "v0.2", 12,000 under "v0.1"; a number is
+    # an explicit override either way. Read it through ``effective_subcall_chars``.
+    subcall_chars: int | None = None
     max_iterations: int = 20
     max_depth: int = 1
     max_subcalls_per_run: int = 64
@@ -155,6 +173,7 @@ class RLMConfig:
     sft_log: bool = False  # also write sft.jsonl (one line per root turn)
     protocol: str = "fence"  # "fence" (```repl + FINAL) | "tools" (execute_python/final_answer)
     planner_style: str = "reclamo"  # root prompt/turn format; see PLANNER_STYLES
+    prompt_version: str = DEFAULT_PROMPT_VERSION  # reclamo prompt only; see PROMPT_VERSIONS
     root: ModelConfig
     sub: ModelConfig
 
@@ -168,12 +187,37 @@ class RLMConfig:
                 f"planner_style must be one of {', '.join(PLANNER_STYLES)}, "
                 f"not {self.planner_style!r}"
             )
+        if self.prompt_version not in PROMPT_VERSIONS:
+            raise ConfigError(
+                f"prompt_version must be one of {', '.join(PROMPT_VERSIONS)}, "
+                f"not {self.prompt_version!r}"
+            )
+        if self.subcall_chars is not None and self.subcall_chars < 1:
+            raise ConfigError(f"subcall_chars must be positive, not {self.subcall_chars}")
         if self.planner_style != "reclamo" and self.protocol != "fence":
             raise ConfigError(
                 f"planner_style {self.planner_style!r} speaks fenced ```repl code and "
                 f'FINAL text; it needs protocol = "fence", not {self.protocol!r}'
             )
         self.endpoints()  # validates that roles sharing a base_url agree
+
+    @property
+    def effective_subcall_chars(self) -> int:
+        """The per-call size, in characters, that the prompt advertises and the
+        decompose nudge measures against.
+
+        An explicit ``subcall_chars`` wins. Otherwise v0.1 (and the upstream planner
+        style) keep the fixed 12,000; v0.2 derives it from the sub model's window:
+        ``(window - sub.max_tokens) * (1 - SUBCALL_MARGIN) * SUBCALL_CHARS_PER_TOKEN``,
+        so "one big sub-call" is on the table whenever the sub model can take it.
+        """
+        if self.subcall_chars is not None:
+            return self.subcall_chars
+        if self.prompt_version == "v0.1" or self.planner_style != "reclamo":
+            return V01_SUBCALL_CHARS
+        window = self.sub.context_tokens or self.context_tokens
+        room = (window - self.sub.max_tokens) * (1 - SUBCALL_MARGIN)
+        return max(MIN_SUBCALL_CHARS, int(room * SUBCALL_CHARS_PER_TOKEN))
 
     def _role_endpoint(self, role: str) -> tuple[str, str, str | None, int]:
         mc = self.role(role)

@@ -521,6 +521,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=bench.PLAIN_MAX_TOKENS,
         help="output budget for plain calls, capped by what fits (default %(default)s)",
     )
+    parser.add_argument(
+        "--prompt-version",
+        choices=("v0.1", "v0.2"),
+        default=None,
+        help="reclamo root prompt version (default: the profile's, v0.2); v0.1 reproduces "
+        "the published results",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan; call no model")
     return parser
 
@@ -549,6 +556,8 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = load_config(args.profile, args.profiles)
         cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout)
+        if args.prompt_version:
+            cfg = dataclasses.replace(cfg, prompt_version=args.prompt_version)
     except ConfigError as exc:
         print(f"run_eval: {exc}", file=err)
         return 2
@@ -595,7 +604,8 @@ def main(argv: list[str] | None = None) -> int:
         "max_timeout": cfg.max_timeout,
         "context_tokens": cfg.context_tokens,
         "usable_tokens": bench.usable_tokens(cfg),
-        "subcall_chars": cfg.subcall_chars,
+        "subcall_chars": cfg.effective_subcall_chars,
+        "prompt_version": cfg.prompt_version,
         "root_max_tokens": cfg.root.max_tokens,
         "plain_max_tokens": args.plain_max_tokens,
         "plain_rule": f"bench.run_plain: {bench.PLAIN_RULE}",

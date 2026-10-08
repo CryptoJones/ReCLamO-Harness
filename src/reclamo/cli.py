@@ -19,6 +19,7 @@ from reclamo import __version__
 from reclamo.client import LMClient
 from reclamo.config import (
     PLANNER_STYLES,
+    PROMPT_VERSIONS,
     APIKeyError,
     ConfigError,
     RLMConfig,
@@ -83,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="root prompt and turn format: ours (reclamo, the default) or the upstream "
         "alexzhang13/rlm scaffold RLM-Qwen3-8B was trained on (upstream-rlm-v0)",
+    )
+    run.add_argument(
+        "--prompt-version",
+        choices=PROMPT_VERSIONS,
+        default=None,
+        help="reclamo root prompt version: v0.2 (default, delegation-friendly) or v0.1 "
+        "(the prompt the published results used)",
     )
     run.set_defaults(func=cmd_run)
     return parser
@@ -206,6 +214,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides["protocol"] = args.protocol
     if args.planner_style:
         overrides["planner_style"] = args.planner_style
+    if args.prompt_version:
+        overrides["prompt_version"] = args.prompt_version
     if overrides:
         try:
             cfg = dataclasses.replace(cfg, **overrides)

@@ -30,6 +30,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 ### Fidelity to the paper (arXiv 2512.24601) and upstream rlm
 
 - [ ] Plain baseline picks the better of two attempts using the ground truth ([#57](https://github.com/CryptoJones/ReCLamO-Harness/issues/57))
+- [ ] Root prompt discourages delegation; align with the paper's main prompt ([#59](https://github.com/CryptoJones/ReCLamO-Harness/issues/59))
 
 ## Done
 
