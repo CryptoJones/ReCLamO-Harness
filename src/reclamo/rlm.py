@@ -565,11 +565,8 @@ class RLM:
                         notes.append(reverify_nudge(var))
                 prev_code_hash = code_hash
                 prev_vars = set(results[-1].vars) if results else prev_vars
-            if (
-                self._context_chars > cfg.subcall_chars
-                and self._turn_max_prompt >= 0.9 * self._context_chars
-            ):
-                notes.append(decompose_nudge())
+            if self._wants_decompose_nudge():
+                notes.append(self._decompose_nudge())
             if not blocks and cand is None:
                 notes.append(NO_ACTION_PROMPT)
                 self._slip("no_action")
@@ -826,11 +823,8 @@ class RLM:
                         notes.append(reverify_nudge(var, "tools"))
                 prev_code_hash = code_hash
                 prev_vars = set(results[-1].vars) if results else prev_vars
-            if (
-                self._context_chars > cfg.subcall_chars
-                and self._turn_max_prompt >= 0.9 * self._context_chars
-            ):
-                notes.append(decompose_nudge())
+            if self._wants_decompose_nudge():
+                notes.append(self._decompose_nudge())
             for note in notes:
                 self.printer.note(note)
 
@@ -1102,6 +1096,21 @@ class RLM:
             self.printer.subcall(kind, prompt_chars, len(answer), latency)
             answers.append(answer)
         return answers
+
+    def _wants_decompose_nudge(self) -> bool:
+        """One sub-call this turn got nearly the whole context, and the context is
+        larger than one call can read. Never when the context fits in one call: then a
+        single big sub-call is a legitimate strategy (paper App. C.1 (1a): "see if it is
+        sufficient to just fit it in a few sub-LLM calls")."""
+        return (
+            self._context_chars > self.cfg.effective_subcall_chars
+            and self._turn_max_prompt >= 0.9 * self._context_chars
+        )
+
+    def _decompose_nudge(self) -> str:
+        return decompose_nudge(
+            self.cfg.prompt_version, self._context_chars, self.cfg.effective_subcall_chars
+        )
 
     def _check_limits(self, repl: REPL, answer_state: dict[str, Any] | None) -> None:
         assert self._budget is not None
@@ -1550,7 +1559,7 @@ class RLM:
                 "Below are outputs from earlier steps of a data-analysis session. Summarize "
                 f"what was learned in under {SUMMARY_CHARS} characters: facts found, variable "
                 "names created and what they hold, and anything still unresolved.\n\n"
-                f"{body[: cfg.subcall_chars]}"
+                f"{body[: cfg.effective_subcall_chars]}"
             )
             try:
                 completion = self.client.complete(

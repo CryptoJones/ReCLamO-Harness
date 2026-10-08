@@ -832,6 +832,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="fence",
         help="how the rlm mode acts: fenced code (default) or tool calls",
     )
+    parser.add_argument(
+        "--prompt-version",
+        choices=("v0.1", "v0.2"),
+        default=None,
+        help="reclamo root prompt version (default: the profile's, v0.2); v0.1 reproduces "
+        "the published results",
+    )
     parser.add_argument("--dry-run", action="store_true", help="print the plan; call no model")
     return parser
 
@@ -870,6 +877,8 @@ def main(argv: list[str] | None = None) -> int:
 
         cfg = load_config(args.profile, args.profiles)
         cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout, protocol=args.protocol)
+        if args.prompt_version:
+            cfg = dataclasses.replace(cfg, prompt_version=args.prompt_version)
     except ConfigError as exc:
         print(f"bench: {exc}", file=err)
         return 2
@@ -916,7 +925,8 @@ def main(argv: list[str] | None = None) -> int:
         "plain_rule": PLAIN_RULE,
         "root_enable_thinking": cfg.root.enable_thinking,
         "max_timeout": cfg.max_timeout,
-        "subcall_chars": cfg.subcall_chars,
+        "subcall_chars": cfg.effective_subcall_chars,
+        "prompt_version": cfg.prompt_version,
         "max_depth": cfg.max_depth,
         "created": meta.get("created", stamp),
         "updated": stamp,

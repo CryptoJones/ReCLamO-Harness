@@ -293,15 +293,71 @@ def test_reverify_nudge_on_repeated_code() -> None:
     assert "FINAL_VAR(count)" in third
 
 
-def test_decompose_nudge_when_whole_context_sent_to_one_call() -> None:
-    cfg = _cfg(subcall_chars=100)
+@pytest.mark.parametrize(
+    "version, text",
+    [
+        ("v0.1", "handed nearly the whole context to a single sub-call"),
+        ("v0.2", "whole context (1,000 characters) to a single sub-call"),
+    ],
+)
+def test_decompose_nudge_when_whole_context_sent_to_one_call(version: str, text: str) -> None:
+    cfg = _cfg(subcall_chars=100, prompt_version=version)
     big = "x" * 1000
     result, lm = _run(["```repl\nr = llm_query(context)\n```", "FINAL(ok)"], cfg=cfg, context=big)
     assert result.answer == "ok"
-    assert (
-        "handed nearly the whole context to a single sub-call"
-        in (lm.root_calls[1]["messages"][-1]["content"])
+    assert text in lm.root_calls[1]["messages"][-1]["content"]
+
+
+def test_no_decompose_nudge_when_the_context_fits_one_sub_call() -> None:
+    # v0.2 derives the per-call size from the sub window: (32,768 - 4,096) * 0.85 * 3.
+    cfg = _cfg()
+    assert cfg.subcall_chars is None and cfg.effective_subcall_chars == 73_113
+    big = "x" * 50_000
+    result, lm = _run(["```repl\nr = llm_query(context)\n```", "FINAL(ok)"], cfg=cfg, context=big)
+    assert result.answer == "ok" and result.subcalls == 1
+    assert "single sub-call" not in lm.root_calls[1]["messages"][-1]["content"]
+
+
+def test_subcall_size_derivation_and_override() -> None:
+    import dataclasses
+
+    from reclamo.config import ModelConfig
+
+    cfg = _cfg(context_tokens=32_768, sub=ModelConfig(model="m", max_tokens=4_096))
+    assert cfg.effective_subcall_chars == int((32_768 - 4_096) * 0.85 * 3)
+    # A separate sub endpoint with its own window is what counts.
+    wide = dataclasses.replace(
+        cfg, sub=ModelConfig(model="m", max_tokens=4_096, context_tokens=131_072)
     )
+    assert wide.effective_subcall_chars == int((131_072 - 4_096) * 0.85 * 3)
+    assert dataclasses.replace(cfg, subcall_chars=9_000).effective_subcall_chars == 9_000
+    assert dataclasses.replace(cfg, prompt_version="v0.1").effective_subcall_chars == 12_000
+    assert (
+        dataclasses.replace(cfg, prompt_version="v0.1", subcall_chars=5_000).effective_subcall_chars
+        == 5_000
+    )
+    assert (
+        dataclasses.replace(cfg, planner_style="upstream-rlm-v0").effective_subcall_chars == 12_000
+    )
+    tiny = dataclasses.replace(cfg, context_tokens=5_000)
+    assert tiny.effective_subcall_chars == 4_000  # floor
+
+
+def test_prompt_version_validated() -> None:
+    from reclamo.config import ConfigError
+
+    with pytest.raises(ConfigError, match="prompt_version"):
+        _cfg(prompt_version="v3")
+    with pytest.raises(ConfigError, match="subcall_chars"):
+        _cfg(subcall_chars=0)
+
+
+@pytest.mark.parametrize("version", ["v0.1", "v0.2"])
+def test_system_prompt_follows_prompt_version(version: str) -> None:
+    result, lm = _run(["FINAL(1)"], cfg=_cfg(prompt_version=version))
+    system = lm.root_calls[0]["messages"][0]["content"]
+    assert ("orchestrator, not a solver" in system) is (version == "v0.2")
+    assert ("sub-calls are expensive" in system) is (version == "v0.1")
 
 
 # --- limits -------------------------------------------------------------------
@@ -557,7 +613,8 @@ def test_length_finish_with_empty_content_retries_without_thinking() -> None:
 def test_compaction_stubs_old_outputs_and_keeps_full_history_in_repl(tmp_path: Path) -> None:
     # input budget = 2,000 - 256 (root max_tokens) - 200 (10% margin) = 1,544 est. tokens
     root_cfg = ModelConfig(model="m", enable_thinking=True, max_tokens=256)
-    cfg = _cfg(context_tokens=2_000, max_iterations=8, root=root_cfg)
+    # A tiny window sized around the v0.1 prompt (the v0.2 prompt is longer).
+    cfg = _cfg(context_tokens=2_000, max_iterations=8, root=root_cfg, prompt_version="v0.1")
     loud = "```repl\nprint('x' * 400)\n```"
     root = [
         loud,

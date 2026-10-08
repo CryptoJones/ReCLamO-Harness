@@ -379,7 +379,8 @@ def test_length_finish_without_tool_calls_retries_without_thinking() -> None:
 
 def test_compaction_keeps_tool_messages_valid() -> None:
     root_cfg = ModelConfig(model="m", enable_thinking=True, max_tokens=256)
-    cfg = _cfg(context_tokens=2_800, max_iterations=8, root=root_cfg)
+    # A tiny window sized around the v0.1 prompt (the v0.2 prompt is longer).
+    cfg = _cfg(context_tokens=2_800, max_iterations=8, root=root_cfg, prompt_version="v0.1")
     root = [tool_turn(py(f"print('{c}' * 400)")) for c in "xyzwvu"]
     root.append(tool_turn(call("final_answer", answer="done")))
     result, lm = _run(root, cfg=cfg)
@@ -426,7 +427,9 @@ def test_unknown_protocol_rejected() -> None:
 def test_tools_prompt_keeps_batching_guidance_without_fences() -> None:
     from reclamo.prompts import ContextMeta, PromptSettings
 
-    prompt = build_tools_system_prompt(PromptSettings(), ContextMeta("str", 10))
+    prompt = build_tools_system_prompt(
+        PromptSettings(prompt_version="v0.1"), ContextMeta("str", 10)
+    )
     assert "sub-calls are expensive" in prompt and "llm_query_batched" in prompt
     assert "```" not in prompt and "FINAL" not in prompt
     assert "execute_python with code:" in prompt

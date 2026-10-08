@@ -28,7 +28,9 @@ def test_builtin_pluto_profile() -> None:
     assert cfg.api_key_cmd == "pass pluto/flashnext-api-key"
     assert cfg.concurrency == 1
     assert cfg.context_tokens == 32768
-    assert cfg.subcall_chars == 12_000
+    assert cfg.subcall_chars is None and cfg.prompt_version == "v0.2"
+    # (32,768 - 2,048) tokens * 0.85 * 3 chars/token
+    assert cfg.effective_subcall_chars == 78_336
     assert (cfg.max_iterations, cfg.max_depth) == (20, 1)
     assert (cfg.max_subcalls_per_run, cfg.max_subcalls_per_exec) == (64, 24)
     assert cfg.output_truncate_chars == 2_000

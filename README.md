@@ -99,7 +99,8 @@ max_iterations = 30          # override one field of a built-in profile
 base_url = "http://lab:8000/v1"
 concurrency = 2
 context_tokens = 65536
-subcall_chars = 16000        # how much text the prompt tells the model to batch per sub-call
+subcall_chars = 16000        # per-call size the prompt advertises (default: derived, see below)
+prompt_version = "v0.2"      # root prompt version: v0.2 (default) or v0.1 (published results)
 max_subcalls_per_run = 64
 max_subcalls_per_exec = 24
 exec_timeout = 120.0         # seconds per REPL execution
@@ -253,6 +254,45 @@ Caveats:
   shrinking even the newest turn's outputs when it must. Lower `output_truncate_chars` so the
   planner sees more of each output.
 - Not yet run against a hosted copy: that smoke run is [#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40).
+
+### Root prompt versions: v0.2 and v0.1
+
+[#59](https://github.com/CryptoJones/ReCLamO-Harness/issues/59). `prompt_version`
+selects the `reclamo` root prompt (fence and tools protocols alike). `planner_style =
+"upstream-rlm-v0"` ignores it and stays verbatim.
+
+- **`v0.2` (default)** follows the paper's main prompt and upstream's current prompt
+  on delegation.
+- **`v0.1`** is the prompt every result in this README was measured with, kept byte
+  for byte (system prompts, nudge text and the 12,000-character per-call hint). Use
+  `--prompt-version v0.1` (on `reclamo run`, `bench.py` and `run_eval.py`) or
+  `prompt_version = "v0.1"` in a profile to reproduce them.
+
+What v0.2 changes, and why:
+
+| | v0.1 | v0.2 | Source |
+|---|---|---|---|
+| Stance on sub-calls | "IMPORTANT: sub-calls are expensive … never 1000 … further calls fail with an error" | "you are strongly encouraged to use them as much as possible … don't be afraid to put a lot of context into one call". The hard caps are stated as plain facts | Paper App. C.1 (1a), the main prompt |
+| Planning | none | "Work as an orchestrator, not a solver": probe, state the decomposition and the sequence of turns, then delegate. It also says when **not** to delegate: if a keyword/regex search already pins the answer, or one visible passage holds it, read it directly | Upstream `ORCHESTRATOR_ADDENDUM` (`rlm/utils/prompts.py`, added in `de762b9` on 2026-05-24, on by default) |
+| Examples | chunk-and-map, split-on-structure | one call when the data fits; map then **aggregate** with a final `llm_query`; a **running buffer** carried from call to call | Paper App. C.1 (1a): the book example (whose undefined `buffers` is fixed here) and the per-chunk "aggregating all the answers" call |
+| Per-call size | fixed 12,000 characters | derived from the sub model's window: `(window − sub.max_tokens) × 0.85 × 3` characters (78,336 on `pluto`); `subcall_chars` still overrides it, and a sub endpoint can set its own `context_tokens` | Paper (1a): "Analyze your input data and see if it is sufficient to just fit it in a few sub-LLM calls!" |
+| Decompose nudge | fires when one call gets ≥90% of a context over 12,000 characters | the same, but measured against the derived size, so it never fires when the whole context fits in one sub-call. Its text gives both sizes | the same |
+
+Why the warning went. The paper's GPT-5 prompt (1a) has no warning. Its "IMPORTANT: Be
+very careful about using `llm_query` as it incurs high runtime costs" line was added for
+Qwen3-Coder (1b) and the Qwen3-8B variant (1d), because "without this warning, the model
+will try to perform a subcall on everything, leading to thousands of LM subcalls for
+basic tasks" (App. C). Our failure is the opposite: in the #22 re-run only 7 of 40 rlm
+rows made any sub-call. The caps (`max_subcalls_per_exec`, `max_subcalls_per_run`) still
+enforce the limit, so the prompt does not need to.
+
+The size formula is conservative on purpose. The sub-call prompt also carries the
+question. Digit-heavy text runs close to one token per character, while prose runs
+near four. An oversized prompt fails as a server error inside the REPL, which the model
+sees and can recover from.
+
+The copied upstream text keeps its MIT notice beside it in `src/reclamo/prompts.py`.
+`max_iterations`, `output_truncate_chars` and sampling are unchanged by v0.2.
 
 ### Context budget
 
