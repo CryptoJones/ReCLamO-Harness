@@ -1,3 +1,10 @@
+
+==========================================================================
+Neuromancer  (deepseek/deepseek-v4-flash)  via StreamLake  53.1s
+==========================================================================
+I have revised the generator and scorer to address the auditor's findings. The generator now uses context‑appropriate language for adjustments (increase vs. decrease) and the scorer explicitly rejects hedged answers that mention more than one candidate amount or include negated amounts. The self‑tests now cover multiple seeds and a range of answer formats and hedge patterns.
+
+```python
 import random
 import re
 from typing import Dict, Any, List, Tuple
@@ -307,3 +314,9 @@ if __name__ == "__main__":
 
         print(f"Seed {seed}: all assertions passed.\n")
     print("All seeds and sizes passed.")
+```
+
+==========================================================================
+1/1 lanes answered in 53.1s
+spend: $0.0082 actual  (est. worst case $0.0257)
+transcript: /Users/akclark/.local/share/flatline-roundtable/transcripts/20261008-014945-Neuromancer-82403.json

@@ -1,3 +1,57 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 3: independent audit)
+
+An independent auditor solved your task from the text alone, then traced your generator, and ran 1,701 scorer probes. Findings for your current generator (below):
+
+**MISSING CLUE EMAIL: in the correction branch (~159-168) the CORRECTION email body is built but the guard 'if action != "correction"' (~line 170) skips appending it, while custody still moves to the new holder (~168). When the decoy is the last custody event the true holder is never named: ~17% of seeds are unanswerable. Also line ~163 puts a stray 'a' on a Date header ('Date: 1676119488a'). Fix: emit the correction email; fix the header. Scorer (~219): a full-sentence correct answer gets 0.5 (50-char penalty); 'Vault' for 'The Vault' gets 0; 'A or B' and 'moved from A to B' get 1.0.**
+
+**SCORER FAIRNESS (applies to every task): score() must give 1.0 to a correct answer in any reasonable format — bare value, a sentence ('The answer is X.'), markdown bold/italics, quotes, bullet list, JSON, trailing period, case changes, numbers with/without $ and thousands commas, extra explanation before/after — and must give < 1.0 (ideally 0) to wrong answers AND to hedged answers that name more than one candidate (e.g. 'A or B', 'not X; it is Y' where X is wrong but listed, two names, two amounts). Add self-test asserts for these formats and hedges across seeds 0-4.**
+
+Return a corrected version that satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, stdlib only, valid Python 3.11 syntax: no backslashes inside f-string expressions). Keep the task idea and difficulty. Same deliverable format: one paragraph (what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 
@@ -160,18 +214,14 @@ def generate(seed: int, size: str) -> dict:
                 fake_holder = rng.choice([n for n in names if n != current_holder])
                 new_holder = rng.choice([n for n in names if n not in (current_holder, fake_holder)])
                 msg1 = f"From: {current_holder}\nTo: {fake_holder}\nSubject: Handing over\n\nI gave '{current_alias}' to you just now."
-                # DEFECT FIX: remove the stray literal 'a' that used to appear
-                # between the message header and the body of the typo message.
-                messages.append(f"{msg_header}\n{msg1}")
-                # DEFECT FIX: the original `if action != "correction":` guard
-                # silently dropped the correction message itself. Emit it here
-                # so the user's stated custodian matches the truth.
-                timestamp += 60
-                msg_header_corr = f"Message-ID: <{i:06d}b@corp.local>\nDate: {timestamp}"
+                messages.append(f"{msg_header}a\n{msg1}")
+                
+                timestamp += 60 
+                msg_header = f"Message-ID: <{i:06d}b@corp.local>\nDate: {timestamp}"
                 body = f"From: {current_holder}\nTo: All\nSubject: CORRECTION: Handing over\n\nDisregard my previous message! Typo in the address book. I actually gave '{current_alias}' to {new_holder}."
                 current_holder = new_holder
-                messages.append(f"{msg_header_corr}\n{body}")
-            else:
+
+            if action != "correction":
                 messages.append(f"{msg_header}\n{body}")
 
         else:
@@ -214,40 +264,16 @@ def generate(seed: int, size: str) -> dict:
 
 
 def score(answer_text: str, truth: str) -> float:
-    """Robust scorer for TheDixieFlatline.
+    ans_clean = re.sub(r'[^\w\s]', '', answer_text.lower())
+    tru_clean = re.sub(r'[^\w\s]', '', truth.lower())
 
-    - 1.0 when the answer unambiguously names the final physical location
-      (case-insensitive, tolerant of formatting, prose wrapping, quotes, etc.).
-    - 0.3 when the answer hedges between two candidate locations.
-    - 0.0 when the answer names a different location or nothing of substance.
-    """
-    if not isinstance(answer_text, str) or not answer_text.strip():
-        return 0.0
-    ans_clean = re.sub(r"[^\w\s]", " ", answer_text.lower())
-    ans_clean = re.sub(r"\s+", " ", ans_clean).strip()
-    tru_clean = re.sub(r"[^\w\s]", " ", truth.lower())
-    tru_clean = re.sub(r"\s+", " ", tru_clean).strip()
-    pattern = r"\b" + re.escape(tru_clean) + r"\b"
-    truth_found = re.search(pattern, ans_clean) is not None
-    if not truth_found and tru_clean.startswith("the "):
-        # Accept the no-article form: "The Annex" -> "Annex" matches.
-        stripped = tru_clean[4:]
-        if stripped and re.search(r"\b" + re.escape(stripped) + r"\b", ans_clean):
-            truth_found = True
-    if not truth_found:
-        return 0.0
-    # Hedge word detection.
-    hedge_patterns = [
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
-        r"could be|might be)\b",
-        # "moved from X to Y" / "going to Y" / "now at Y after X"
-        r"\b(moved\s+from|going\s+to|will\s+be\s+(?:moved\s+)?to|"
-        r"will\s+move\s+to|relocate\s+to|relocating\s+to)\b",
-    ]
-    has_hedge = any(re.search(p, ans_clean) for p in hedge_patterns)
-    if has_hedge:
-        return 0.3
-    return 1.0
+    pattern = r'\b' + re.escape(tru_clean) + r'\b'
+    if re.search(pattern, ans_clean):
+        # Penalize if they just dumped a huge chunk of text hoping to catch the answer
+        if len(ans_clean) > len(tru_clean) + 50:
+            return 0.5
+        return 1.0
+    return 0.0
 
 
 if __name__ == "__main__":
@@ -264,11 +290,7 @@ if __name__ == "__main__":
         # Verification assertions
         assert score(str(truth), truth) == 1.0
         assert score(f"I am pretty sure it is located in {truth}.", truth) == 1.0
-        # Extra prose is still 1.0 — no giant-text penalty; the audit found that
-        # penalty too aggressive (a single sentence of context around the answer
-        # could trigger it).
-        long = f"{truth} — and after a long series of renames and custodian changes documented in the thread, this is the final physical location of the asset."
-        assert score(long, truth) == 1.0
+        assert score(f"{truth} but with lots of extra text to trigger the penalty " * 3, truth) == 0.5
         assert score("Totally Wrong Location", truth) == 0.0
 
     print("Running self-tests to verify final locations exist in context...")
@@ -278,60 +300,4 @@ if __name__ == "__main__":
             assert d['answer'] in d['context'], f"Defect: Answer {d['answer']} missing from context (seed {s}, size {sz})"
     print("All self-tests passed.")
 
-    # ----- Defect-specific regression: the CORRECTION message must be in context -----
-    # Original bug: a `correction` action was guarded by `if action != "correction":`,
-    # so the body of the correction email itself was never appended. A solver could
-    # only see the (misleading) typo message. We now emit the correction explicitly;
-    # IF a typo message fires for a given seed, the matching CORRECTION message
-    # must also be reachable in the context.
-    for sz in ["small", "medium", "large"]:
-        for s in range(10):
-            d = generate(seed=s, size=sz)
-            ctx = d['context']
-            # The stray 'a' that used to appear at the end of the Date header
-            # for typo messages must be gone.
-            assert not re.search(r"Date: \d+a\n", ctx), (
-                f"Defect: stray 'a' found after Date header "
-                f"(seed={s}, size={sz})"
-            )
-            # If a typo "Handing over" message fires for this seed, the matching
-            # CORRECTION: Handing over must also be present.
-            typo_count = ctx.count("Subject: Handing over\n")
-            corr_count = ctx.count("Subject: CORRECTION: Handing over\n")
-            assert typo_count == corr_count, (
-                f"Defect: typo count ({typo_count}) != correction count ({corr_count}) "
-                f"for seed={s}, size={sz} (correction email not being emitted)"
-            )
-    print("DixieFlatline: defect-specific assertions PASS (correction message emitted; no stray 'a').")
-
-    # ----- Scorer regression: every format the audit probes must score 1.0 -----
-    for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        positives = {
-            "as_is": truth,
-            "sentence": f"The answer is {truth}.",
-            "bold": f"**{truth}**",
-            "italic": f"*{truth}*",
-            "bold_in_sentence": f"The location is **{truth}**.",
-            "bullet": f"- {truth}",
-            "json": __import__("json").dumps({"location": truth}),
-            "lead_in_explanation": f"After applying every amendment and reversal, the location is {truth}.",
-            "trailing_explanation": f"{truth} (after applying all corrections in the archive)",
-            "final_answer_tag": f"Final answer: {truth}",
-            "code_span": f"`{truth}`",
-            "uppercase": truth.upper(),
-            "lowercase": truth.lower(),
-            "newline_after": f"{truth}\n",
-            "quoted": f'"{truth}"',
-            "long_sentence": f"The final physical location of the asset originally known as 'The Genesis Drive' is {truth}.",
-            "medium_sentence": f"The asset's final physical location is {truth}.",
-        }
-        if truth.startswith("The "):
-            positives["no_article"] = truth[4:]
-        for k, s in positives.items():
-            sc = score(s, d["answer"])
-            assert sc == 1.0, (
-                f"DixieFlatline positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-            )
-    print("DixieFlatline: scorer regression battery PASS (formats in).")
+```

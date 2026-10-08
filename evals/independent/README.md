@@ -152,4 +152,37 @@ scorer changed. Everything is under `fixed/round2/`: requests, responses, both s
 fixes and `FIXES.md`. The #22 numbers were measured on the earlier versions and have not
 been re-run.
 
+## Round 3: the independent audit (2026-10-08)
+
+An auditor solved every task from the text alone before looking at any key, and ran 1,701
+scorer probes (`audit/REPORT.md`). Both #22 runs had been scored with these versions. It
+found:
+
+- **Answer keys:**
+  - Cerebex: the key filtered on divisions the text never stated.
+  - SELMA: the visible dates contradicted the event order.
+  - TheDixieFlatline: the CORRECTION email was never emitted.
+- **Wording:** MasterControl and Neuromancer.
+- **Scorers:** in all 8 tasks, correct answers in ordinary formats were marked down and
+  hedged answers got full credit.
+
+Same procedure as before: each author lane got its findings and MiniMax-M3 repaired all
+eight in parallel. Only Neuromancer's author fix passed everything. TheDixieFlatline's
+author fix looked clean but still dropped the CORRECTION email, which the text-only solver
+caught. The other active versions are MiniMax's.
+
+The active set was then verified with:
+- `check.py`;
+- each self-test;
+- the audit's `scripts/scorer_battery.py` (0 flags, now run in CI by
+  `tests/test_scorer_fairness.py`);
+- the SELMA solver (date order = key on 100/100 seeds);
+- a CORRECTION-count assertion for TheDixieFlatline;
+- byte-identical generation for the scorer-only tasks.
+
+Known residuals:
+- SELMA's key is "Unassigned" on about 62% of seeds.
+- Cerebex is 0 on about 26% of seeds, and some "paperwork" mentions are non-travel
+  distractors.
+
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*

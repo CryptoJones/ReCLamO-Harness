@@ -1,3 +1,57 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 3: independent audit)
+
+An independent auditor solved your task from the text alone, then traced your generator, and ran 1,701 scorer probes. Findings for your current generator (below):
+
+**VISIBLE DATES CONTRADICT EVENT ORDER: the key follows the internal timeline/email order (~line 310) but the Date header printed on each email is a fresh random date within the year (~line 290), so sorting by date disagrees with the key on ~34% of seeds. Also the key is 'Unassigned' on ~70% of seeds (constant guess wins), and each assignment email names a random project (~186) so readers may treat them as separate reviews. Fix: print the real internal date in each Date header so date order == event order, balance the final state (roughly half named owner, half unassigned at most), reuse the kickoff project name. Scorer (~477, ~491): gives 0 to '**Name**' in a sentence, JSON, quoted name, 'Name, who...', 'Last, First'; and 0 to 'The answer is Unassigned.' / 'currently unassigned'.**
+
+**SCORER FAIRNESS (applies to every task): score() must give 1.0 to a correct answer in any reasonable format — bare value, a sentence ('The answer is X.'), markdown bold/italics, quotes, bullet list, JSON, trailing period, case changes, numbers with/without $ and thousands commas, extra explanation before/after — and must give < 1.0 (ideally 0) to wrong answers AND to hedged answers that name more than one candidate (e.g. 'A or B', 'not X; it is Y' where X is wrong but listed, two names, two amounts). Add self-test asserts for these formats and hedges across seeds 0-4.**
+
+Return a corrected version that satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, stdlib only, valid Python 3.11 syntax: no backslashes inside f-string expressions). Keep the task idea and difficulty. Same deliverable format: one paragraph (what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 import string
@@ -156,13 +210,12 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     # Now generate actual email text for each timeline event, plus filler
     all_entries = []
     
-    # Add the kickoff email as first entry (date fixed to match timeline[0][0]).
-    _ky, _km, _kd = timeline[0][0].split("-")
+    # Add the kickoff email as first entry
     all_entries.append((
         timeline[0][0],  # date
         f"From: {initiator} <{initiator.lower().replace(' ', '.')}@company.com>\n"
         f"To: {dept} Team <{dept.lower()}@company.com>\n"
-        f"Date: {MONTHS[int(_km) - 1]} {int(_kd)}, {_ky}\n"
+        f"Date: {_rand_date(rng, 2023, 2023)}\n"
         f"Subject: Kickoff: {project} AI Ethics Review\n\n"
         f"Hi team,\n\n"
         f"We're starting the AI Ethics Review for Project {project}. "
@@ -288,12 +341,7 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
                 f"Thanks,\n{sender}"
             )
         
-        # FIX: the visible email date must match the timeline's date_str, otherwise
-        # the rendered timeline order contradicts the date headers in the email
-        # (the audit found 34% of seeds disagreed). Build a "Month DD, YYYY" form
-        # directly from date_str so the two stay in lockstep.
-        _year, _month, _day = date_str.split("-")
-        date_readable = f"{MONTHS[int(_month) - 1]} {int(_day)}, {_year}"
+        date_readable = _rand_date(rng, int(date_str[:4]), int(date_str[:4]))
         email_text = (
             f"From: {sender} <{sender.lower().replace(' ', '.')}@company.com>\n"
             f"To: {recipient}@company.com\n"
@@ -435,103 +483,99 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     }
 
 def score(answer_text: str, truth) -> float:
-    """Robust scorer for SELMA.
-
-    - 1.0 when the answer unambiguously states the truth (case-insensitive,
-      tolerant of formatting, prose wrapping, quotes, JSON, markdown, etc.)
-      AND does NOT name a competing candidate as the "final" or "current" owner.
-    - 0.3 when the answer hedges (names a competing candidate alongside the
-      truth, or denies the truth while naming another).
-    - 0.0 when nothing of substance is found, or a different name is named
-      as the answer.
     """
-    if not isinstance(answer_text, str) or not answer_text.strip():
+    Score the answer against the ground truth.
+    - Case-insensitive
+    - Ignores surrounding punctuation and whitespace
+    - Ignores extra prose before/after but requires the core answer to be present
+    - For names: must match the exact person (first + last) as assigned
+    - "Unassigned" is a special case
+    """
+    if not isinstance(answer_text, str):
         return 0.0
-
-    text = answer_text.strip()
-    text_low = text.lower()
-
+    
+    # Normalize: lower case, strip whitespace, remove punctuation at edges
+    normalized = answer_text.strip().lower()
+    # Remove common punctuation that might surround the answer
+    normalized = normalized.strip(string.punctuation + string.whitespace)
+    
+    # Handle truth
     if truth == "Unassigned":
-        truth_low = "unassigned"
-        truth_words = ["unassigned"]
+        expected = "unassigned"
     else:
-        truth_low = truth.lower().strip()
-        truth_words = truth_low.split()
-
-    # Detect hedge words that would suggest competing candidates.
-    hedge_patterns = [
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
-        r"could be|might be|not\s+\w+)\b",
-    ]
-    has_hedge_word = any(
-        re.search(pat, text_low) for pat in hedge_patterns
-    )
-
-    # For "Unassigned" truth, look for the word "unassigned" in the answer.
-    if truth == "Unassigned":
-        if re.search(r"\bunassigned\b", text_low):
-            # If the answer also says "not unassigned" or hedges, drop below 1.0.
-            if re.search(r"\bnot\s+unassigned\b|\bnever\s+unassigned\b", text_low):
-                return 0.0
-            if has_hedge_word:
-                return 0.3
+        # Expected is the full name in lower case
+        expected = truth.lower()
+    
+    # Check for exact match (after normalization)
+    if normalized == expected:
+        return 1.0
+    
+    # Allow for common variations: missing middle initial, etc. but we don't generate those
+    # Also allow if the answer is embedded in a sentence but we require it to be the core answer
+    # We'll check if the normalized string equals expected, or if it's a sentence that ends/starts with it
+    # But to avoid being too lenitive, we'll require that after stripping, it matches
+    # However, we should allow for punctuation like periods at the end
+    # We already stripped punctuation, so if they wrote "Alex Smith." it becomes "alex smith"
+    
+    # Additionally, check if the expected string is a substring and the answer is short
+    # But to avoid false positives (e.g., "alex" matching "alex smith"), we require word boundaries
+    # Since we normalized, we can split and check
+    if expected == "unassigned":
+        # Check if the answer is exactly unassigned, possibly with extra words
+        # We'll be strict: must be exactly unassigned
+        if normalized == "unassigned":
             return 1.0
-        # "None" / "No one" / "nobody" / "empty" are also valid unassigned phrasings.
-        if re.search(r"\b(none|no\s+one|nobody|nothing|empty|vacant|unfilled)\b", text_low):
-            if has_hedge_word:
-                return 0.3
-            return 1.0
-        # Otherwise wrong (the answer names someone or is gibberish).
-        return 0.0
-
-    # Truth is a name. Check for the full name (case-insensitive) anywhere in
-    # the answer, OR last-first form.
-    name_variants = [truth_low]
-    if len(truth_words) == 2:
-        last_first = truth_words[1] + ", " + truth_words[0]
-        name_variants.append(last_first)
-    truth_present = any(v in text_low for v in name_variants)
-
-    if not truth_present:
-        return 0.0
-
-    # Find other candidate names mentioned in the answer (Title-Case multi-word).
-    other_name_pattern = re.compile(
-        r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)\b"
-    )
-    other_candidates = [
-        n.lower() for n in other_name_pattern.findall(text)
-    ]
-    other_candidates = [
-        n for n in other_candidates
-        if n != truth_low and n not in name_variants
-    ]
-
-    # Check whether the answer says "the final owner is X" or "current owner is X"
-    # pointing at a competing candidate.
-    is_phrases = re.findall(
-        r"\b(?:final|current|new|latest|now|true|actual|real|new)\s+"
-        r"(?:final\s+)?owner\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)",
-        text,
-    )
-    is_phrases_low = [s.lower() for s in is_phrases]
-    # If the answer names a competing candidate as "the final/current owner",
-    # the answer is wrong about the truth.
-    if is_phrases_low and any(p != truth_low for p in is_phrases_low):
-        return 0.0
-
-    # If the answer says "moved from <truth> to <other>; the final owner is <other>"
-    # this is a hedge that explicitly picks the wrong person.
-    if other_candidates and has_hedge_word:
-        # Look for a hedge that resolves to a competing candidate.
-        denial = re.search(
-            r"\bnot\s+" + re.escape(truth_low), text_low
-        )
-        if denial:
+        # But allow common phrases like "The owner is unassigned" -> we want to detect that
+        # So we'll check if the normalized string contains "unassigned" and is not too long
+        words = normalized.split()
+        if len(words) <= 3 and "unassigned" in words:
+            # Check that it's not like "assigned" or "unassignedly"
+            for i, w in enumerate(words):
+                if w == "unassigned":
+                    # Check surroundings
+                    if (i == 0 or words[i-1] in ["the", "is", "was", "current", "final"]) and \
+                       (i == len(words)-1 or words[i+1] in [".", "!", "", "is", "was"]):
+                        return 1.0
+            # If we get here, it's ambiguous
             return 0.0
-        return 0.3
-
-    return 1.0
+    else:
+        # For names: check if the normalized answer matches the expected name
+        # We'll split into words and check if all expected words appear in order
+        expected_words = expected.split()
+        answer_words = normalized.split()
+        
+        # Check for exact sequence
+        if answer_words == expected_words:
+            return 1.0
+        
+        # Check if answer_words contains expected_words as a subsequence (in order)
+        # But we don't want to allow missing words (e.g., just "Alex" for "Alex Smith")
+        # So we require all expected words to be present
+        if all(word in answer_words for word in expected_words):
+            # Now check if they appear in the right order (simple version: find first occurrence of each)
+            # This is not perfect but good enough for our case
+            try:
+                positions = []
+                for word in expected_words:
+                    pos = answer_words.index(word)
+                    positions.append(pos)
+                # Check if positions are increasing
+                if all(positions[i] <= positions[i+1] for i in range(len(positions)-1)):
+                    # Additionally, check that there are no extra words that change meaning
+                    # We'll be lenient: allow extra words at beginning or end
+                    # But not in the middle that would break the name
+                    # Actually, if they wrote "Alex Jay Smith" for "Alex Smith", that's wrong
+                    # So we need to ensure no extra words between the expected words
+                    # Re-check: the sequence must be contiguous
+                    # Find where the subsequence starts
+                    for start in range(len(answer_words) - len(expected_words) + 1):
+                        if answer_words[start:start+len(expected_words)] == expected_words:
+                            return 1.0
+            except ValueError:
+                pass
+    
+    # If we get here, no match
+    return 0.0
 
 if __name__ == "__main__":
     # Print stats for seed 0 at each size
@@ -612,58 +656,4 @@ if __name__ == "__main__":
                 )
     print("SELMA: defect-specific assertions PASS (truth consistent with last ownership email).")
 
-    # ----- Scorer regression: every format the audit probes must score 1.0 -----
-    import json as _json_selma
-    for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        if truth == "Unassigned":
-            positives = {
-                "as_is": "Unassigned",
-                "sentence": "The answer is Unassigned.",
-                "bold": "**Unassigned**",
-                "bold_in_sentence": "The owner is **Unassigned**.",
-                "json": _json_selma.dumps({"owner": "Unassigned"}),
-                "lead_in_explanation": "After applying every amendment and reversal, the owner is Unassigned.",
-                "trailing_explanation": "Unassigned (after applying all corrections in the archive)",
-                "final_answer_tag": "Final answer: Unassigned",
-                "code_span": "`Unassigned`",
-                "uppercase": "UNASSIGNED",
-                "lowercase": "unassigned",
-                "newline_after": "Unassigned\n",
-                "quoted": '"Unassigned"',
-                "sentence_currently": "The AI Ethics Review is currently unassigned.",
-                "no_one": "No one is currently assigned (Unassigned).",
-                "dash_explain": "Unassigned - the last owner was removed and nobody replaced them.",
-                "final_owner_unassigned": "Final owner: Unassigned",
-                "none": "None",
-            }
-        else:
-            positives = {
-                "as_is": truth,
-                "sentence": f"The answer is {truth}.",
-                "bold": f"**{truth}**",
-                "bold_in_sentence": f"The owner is **{truth}**.",
-                "json": _json_selma.dumps({"owner": truth}),
-                "lead_in_explanation": f"After applying every amendment and reversal, the owner is {truth}.",
-                "trailing_explanation": f"{truth} (after applying all corrections in the archive)",
-                "final_answer_tag": f"Final answer: {truth}",
-                "code_span": f"`{truth}`",
-                "uppercase": truth.upper(),
-                "lowercase": truth.lower(),
-                "newline_after": f"{truth}\n",
-                "quoted": f'"{truth}"',
-                "final_owner_label": f"Final owner: {truth}",
-                "with_dept": f"{truth} (Engineering)",
-                "possessive": f"It is {truth}'s responsibility.",
-                "md_bold_in_sentence": f"The final owner is **{truth}**.",
-                "last_first": f"{truth.split()[-1]}, {truth.split()[0]}",
-                "quoted_in_sentence": f"The final owner is \"{truth}\".",
-                "name_then_comma": f"{truth}, who took over after the last reassignment.",
-            }
-        for k, s in positives.items():
-            sc = score(s, d["answer"])
-            assert sc == 1.0, (
-                f"SELMA positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-            )
-    print("SELMA: scorer regression battery PASS (formats in).")
+```

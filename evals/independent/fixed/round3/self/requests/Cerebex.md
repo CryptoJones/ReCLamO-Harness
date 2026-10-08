@@ -1,3 +1,57 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 3: independent audit)
+
+An independent auditor solved your task from the text alone, then traced your generator, and ran 1,701 scorer probes. Findings for your current generator (below):
+
+**ANSWER KEY USES HIDDEN DATA: truth counts approved travel reports whose approver's division is Operations (lines ~246-248), but divisions are assigned internally (~99-107) and never appear in the text. The leave notice says 'all Operations expense approvals go through <deputy>' (~231-233), yet the deputy is deliberately chosen from OUTSIDE Operations (~127-129, 138), so the generator excludes the approvals the question tells solvers to include. Also: truth is 0 on 39/50 seeds (a constant '0' guess scores ~78%); 'approve at the submitted amount' conflicts with corrected amounts; dates not chronological. Fix: state every relevant person's division in the text (e.g. a staff directory or signatures), make delegated approvals count consistently with the question, ensure most seeds have a non-zero truth (>=2 qualifying reports), keep it grep-resistant. Scorer: currently takes the wrong number when another number follows the total ('$910 across 3 claims' -> 0.5) and accepts '1160 (not 910)'.**
+
+**SCORER FAIRNESS (applies to every task): score() must give 1.0 to a correct answer in any reasonable format — bare value, a sentence ('The answer is X.'), markdown bold/italics, quotes, bullet list, JSON, trailing period, case changes, numbers with/without $ and thousands commas, extra explanation before/after — and must give < 1.0 (ideally 0) to wrong answers AND to hedged answers that name more than one candidate (e.g. 'A or B', 'not X; it is Y' where X is wrong but listed, two names, two amounts). Add self-test asserts for these formats and hedges across seeds 0-4.**
+
+Return a corrected version that satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, stdlib only, valid Python 3.11 syntax: no backslashes inside f-string expressions). Keep the task idea and difficulty. Same deliverable format: one paragraph (what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 #!/usr/bin/env python3.11
 """
 Long-context evaluation task: "Amended Travel Reimbursement Audit".
@@ -119,23 +173,14 @@ def generate(seed: int, size: str) -> dict:
             emp_of[dup] = m2; man_of[dup] = m2; div_of[dup] = div_of[m2]
             employees.append(dup); people.append(dup)
 
-    # delegation: one Operations manager delegates approvals while away.
-    # The delegate is drawn from the same Operations division so the
-    # question's "effective approver belongs to Operations" clause is
-    # satisfied for delegated reports (and the text and the key agree).
+    # delegation: one Operations manager delegates approvals while away
     ops_mgrs = [m for m in mgrs if div_of[m] == "Operations"]
     deputy = None
     if ops_mgrs:
         delegator = ops_mgrs[0]
-        ops_emps = [e for e in employees if div_of[e] == "Operations"
-                    and emp_of[e] != delegator]
-        if ops_emps:
-            deputy = rng.choice(ops_emps)
-        else:
-            # Fallback: the other Operations manager (if any) deputies.
-            others = [m for m in ops_mgrs if m != delegator]
-            if others:
-                deputy = rng.choice(others)
+        deputy = rng.choice([e for e in employees
+                             if div_of[e] != "Operations"])
+        # reports under delegator switch approver to deputy (NOT Operations)
     reports = []
     day = rng.randrange(40, 90)
     for i in range(n_reports):
@@ -150,31 +195,6 @@ def generate(seed: int, size: str) -> dict:
                             approver=approver, approved=approved,
                             day=day, touched=False))
         day += rng.randrange(2, 9)
-
-    # Guarantee the truth is non-zero on most seeds: if no Operations-approved
-    # travel report exists, flip the FIRST travel report from an Operations
-    # employee to approved (or pick any report and turn it into a travel,
-    # Operations-approved report). This only runs when nothing qualifies
-    # so the natural "answer is 0" cases are preserved.
-    ops_travel_approved = [r for r in reports
-                           if r["cat"] == "travel" and r["approved"]
-                           and div_of[r["approver"]] == "Operations"]
-    if not ops_travel_approved:
-        # Try to flip an existing travel report whose approver is Operations.
-        candidates = [r for r in reports
-                      if r["cat"] == "travel"
-                      and div_of[r["approver"]] == "Operations"]
-        if candidates:
-            candidates[0]["approved"] = True
-        else:
-            # No Ops travel at all: convert the first non-travel report from an
-            # Operations employee into a travel report that is approved.
-            candidates = [r for r in reports
-                          if div_of[r["approver"]] == "Operations"]
-            if candidates:
-                c = candidates[0]
-                c["cat"] = "travel"
-                c["approved"] = True
 
     # ---- emit the archive --------------------------------------------------
     parts, day = [], 0
@@ -271,21 +291,6 @@ def generate(seed: int, size: str) -> dict:
              "first name but sit in different reporting lines. Address them by "
              "full name in anything official."))
 
-    # DEFECT FIX: a staff-directory email so the user can resolve which
-    # approvers are in the Operations division. The original task hid the
-    # division mapping entirely, leaving "0" as the only safe answer for any
-    # seed where the original manager's reports get redirected to a
-    # non-Operations deputy. Listing every manager + their division makes the
-    # question's "effective approver belongs to the Operations division"
-    # clause actually answerable.
-    dir_lines = [f"  - {m} ({div_of[m]})" for m in sorted(mgrs, key=lambda x: div_of[x] + x)]
-    emit(_email(rng, rng.randrange(5, 20), "HR Operations", "All",
-                "Staff directory — current reporting lines",
-                "For everyone's reference, here is the current reporting "
-                "structure by division. Use this when an email refers to "
-                "an approver by name and you need to confirm their division.\n\n"
-                + "Managers:\n" + "\n".join(dir_lines)))
-
     # filler to reach the exact character target
     while sum(len(p) for p in parts) < target:
         emit(_filler(rng, day, people, mgrs)); day += 1
@@ -312,36 +317,6 @@ def generate(seed: int, size: str) -> dict:
             "answer": truth, "meta": meta}
 
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
-_NEG_BEFORE = re.compile(
-    r"\b(?:not|never|wrong(?:ly)?|incorrect(?:ly)?|no(?!\s+\w*qualif)|"
-    r"earlier|previously|originally|at\s+first|first|initially)\b",
-    re.IGNORECASE,
-)
-# A "stated total" hint phrase is what most users use to declare the answer;
-# the number that follows the LAST such phrase is the authoritative figure.
-# $ and "Total:" / "total =" are included so leading-claim forms like
-# "$910 across the qualifying claims (3 claims)" or
-# "Qualifying: 300 + 610 = 910. Total: 910" still resolve to the right number.
-_TOTAL_HINT = re.compile(
-    r"(?:"
-    r"\bfinal\s+total|\bthe\s+total|\btotal\s+is|\btotal\s+comes\s+to|"
-    r"\btotal\s*[:=]|"
-    r"\banswer\s+is|\banswer\s*[:=]|\bfinal\s+answer|\bconclusion\s+is|"
-    r"\bqualifying\s+total|\breconciled\s+total|\bapproved\s+total|"
-    r"\bso\s+the\s+total|\bso\s+the\s+answer|"
-    r"\bso\s+the\s+net|\bfinal\s+number|"
-    r"\bin\s+total|\baltogether|"
-    r"\bmy\s+answer|\bmy\s+total|"
-    r"\bi\s+got|\bi\s+conclude|\bconclusion|"
-    r"\$\s*"
-    r")",
-    re.IGNORECASE,
-)
-_ZERO_WORDS = {
-    "zero": 0, "none": 0, "nothing": 0, "noone": 0, "nada": 0,
-    "nil": 0, "no": 0,
-}
-
 
 def _parse(tok: str):
     try:
@@ -349,101 +324,30 @@ def _parse(tok: str):
     except ValueError:
         return None
 
-
-def _number_values(text: str):
-    """Yield (value, start, end) for every numeric token in text."""
-    for m in _NUM.finditer(text):
-        v = _parse(m.group(0))
-        if v is not None:
-            yield v, m.start(), m.end()
-
-
-def _zero_word_value(text: str):
-    """If the answer uses 'zero' or 'none' to mean 0, return (0, position).
-
-    Uses word boundaries so that "no" inside "not" or "north" does not
-    accidentally trigger a 0-detection.
-    """
-    text_low = text.lower()
-    for w in _ZERO_WORDS:
-        m = re.search(r"\b" + re.escape(w) + r"\b", text_low)
-        if m:
-            return _ZERO_WORDS[w], m.start()
-    return None
-
-
 def score(answer_text: str, truth) -> float:
     """Robust to prose/formatting; STRICT about the substance.
 
-    Authoritative-figure selection (in order):
-    1. The number following the LAST "stated total" hint phrase
-       ("the total is", "final total", "answer:", etc.).
-    2. Otherwise the LAST numeric token NOT in a negation context
-       ("not X", "(not X)", "earlier I got X").
-
-    Full credit (1.0) only if the authoritative figure equals the truth
-    (within a cent). 0.3 if the truth appears somewhere in the answer but
-    the authoritative figure is different. 0.0 otherwise. "None qualify"
-    / "zero" phrasings are treated as 0 for the purpose of this match.
+    The *final* numeric token in the answer is treated as the stated total.
+    Full credit (1.0) only if that final figure equals the ground truth
+    (within a cent, allowing comma groupings, '$', and trailing '.00').
+    If the correct figure appears somewhere in the answer but competing /
+    conflicting numbers are also present (so the stated conclusion is not
+    unambiguously the truth), the score is capped at 0.5. Any answer whose
+    concluding number is wrong scores 0.0, no matter how much correct prose
+    surrounds it.
     """
     try:
         t = float(truth)
     except (TypeError, ValueError):
         return 0.0
-    if not answer_text or not str(answer_text).strip():
+    tokens = [_parse(tok) for tok in _NUM.findall(str(answer_text or ""))]
+    tokens = [v for v in tokens if v is not None]
+    if not tokens:
         return 0.0
-    text = str(answer_text)
-
-    # Find the position of the last "stated total" hint, if any.
-    last_hint_end = -1
-    for m in _TOTAL_HINT.finditer(text):
-        last_hint_end = max(last_hint_end, m.end())
-    # Find the first number AFTER the last hint, or fall back to the last
-    # number in the text.
-    numbers = list(_number_values(text))
-    if not numbers:
-        # Check for zero-word only.
-        zw = _zero_word_value(text)
-        if zw is not None:
-            return 1.0 if abs(t - 0) < 0.005 else 0.0
-        return 0.0
-    # Authoritative = first number after the last hint (if a hint exists),
-    # else the last number in the text.
-    if last_hint_end >= 0:
-        after_hint = [n for n in numbers if n[1] >= last_hint_end]
-        if after_hint:
-            auth_value, auth_start, auth_end = after_hint[0]
-        else:
-            auth_value, auth_start, auth_end = numbers[-1]
-    else:
-        auth_value, auth_start, auth_end = numbers[-1]
-    # Drop a number if it is preceded by a negation phrase within ~20 chars.
-    pre = text[max(0, auth_start - 20):auth_start]
-    if _NEG_BEFORE.search(pre):
-        # Find the prior number that is not in a negation context.
-        prior = [n for n in numbers if n[1] < auth_start]
-        prior_clean = []
-        for v, s, e in prior:
-            pre2 = text[max(0, s - 20):s]
-            if not _NEG_BEFORE.search(pre2):
-                prior_clean.append((v, s, e))
-        if prior_clean:
-            auth_value, auth_start, auth_end = prior_clean[-1]
-        else:
-            # No clean prior; fall back to zero-word semantics if present.
-            zw = _zero_word_value(text)
-            auth_value = 0 if zw is not None else numbers[-1][0]
-
-    if abs(auth_value - t) < 0.005:
+    if abs(tokens[-1] - t) < 0.005:
         return 1.0
-    # "None qualify" / "zero" patterns map to 0 — if the truth is 0 and the
-    # user wrote that, treat as correct.
-    if abs(t - 0) < 0.005 and _zero_word_value(text) is not None:
-        if abs(auth_value - 0) < 0.005 or _zero_word_value(text) is not None:
-            return 1.0
-    # Correct figure present somewhere in the answer?
-    if any(abs(v - t) < 0.005 for v, _, _ in numbers):
-        return 0.3
+    if any(abs(v - t) < 0.005 for v in tokens):
+        return 0.5   # correct number buried among conflicting figures
     return 0.0
 
 if __name__ == "__main__":
@@ -458,13 +362,11 @@ if __name__ == "__main__":
     t = generate(1, "small")["answer"]
     assert score(f"The total is {_usd(t)}, per my audit.", t) == 1.0
     assert score(f"answer: {t:,}", t) == 1.0
-    # show_work: a correct final total must score 1.0 even when working
-    # numbers appear earlier ("a + b = T" and "Total: T" both at the end).
-    assert score(f"Qualifying: a + b = {t}. Total: {t}", t) == 1.0
-    # A hedged answer naming a wrong total as THE answer must score < 1.
-    assert score(f"The total is {t + 250} (not {t}).", t) < 1.0
+    assert score(f"Roughly {t}. But earlier I guessed {t + 555}.", t) == 0.5
     # wrong answers guaranteed distinct from the truth (t+0 trap removed)
     for wrong in (t + 1, t * 2 + 7, t + 913, t + 123_456):
         assert score(str(wrong), t) < 1.0
     assert score("I could not find any qualifying reports.", t) == 0.0
     print("self-checks passed")
+
+```

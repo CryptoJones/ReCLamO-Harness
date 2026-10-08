@@ -23,6 +23,8 @@ WHY A REGEX / KEYWORD / COUNTING APPROACH FAILS
 
 from __future__ import annotations
 
+import ast
+import json
 import random
 import re
 from dataclasses import dataclass, field
@@ -1301,55 +1303,95 @@ def generate(seed: int, size: str) -> dict[str, Any]:
     return {"context": context, "question": question, "answer": answer, "meta": meta}
 
 
-def _extract_ints(text: str) -> set[int]:
-    """All integer interpretations present in the text.
+_PERSON_NAME = re.compile(
+    r"\b([A-Z][a-z]+)\s+([A-Z][a-z]+(?:-[A-Z][a-z]+)?)\b"
+)
+_AMT_TOKEN = (
+    r"(?:USD\s*)?(?:\$\s*)?(?:"
+    r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|"
+    r"\d+(?:\.\d+)?\s*(?:million|billion|thousand)|"
+    r"\d{6,}"
+    r")"
+)
+_HEDGE_DISJUNCT = re.compile(
+    r"\b(?:or\s+possibly|or\s+maybe|either|alternatively|"
+    r"not\s+sure|candidates?|might\s+be|could\s+be|possibly)\b",
+    re.I,
+)
+_HEDGE_AMT_OR = re.compile(
+    r"(?:" + _AMT_TOKEN + r")\s*(?:/|,|;|\bor\b)\s*(?:possibly\s+)?(?:" + _AMT_TOKEN + r")",
+    re.I,
+)
+_HEDGE_AMT_PAREN = re.compile(
+    r"(?:" + _AMT_TOKEN + r")\s*\(\s*(?:or\s+)?(?:possibly\s+)?(?:" + _AMT_TOKEN + r")",
+    re.I,
+)
+_HEDGE_NAME_OR = re.compile(
+    r"([A-Z][a-z]+\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?)\s+or\s+"
+    r"(?:possibly\s+)?([A-Z][a-z]+\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?)"
+)
+_HEDGE_NOT_NAME = re.compile(
+    r"\bnot\s+([A-Z][a-z]+\s+[A-Z][a-z]+(?:-[A-Z][a-z]+)?)"
+)
+_NEG_OUTCOME = re.compile(
+    r"\b(did not pass|didn t pass|does not pass|did not carry|didn t carry|"
+    r"not passed|not approved|not adopted|not carried|"
+    r"was not approved|were not approved|it was not approved|"
+    r"restatement failed|authorization failed)\b"
+)
+_POS_OUTCOME = re.compile(
+    r"\b(passed|carried|approved|adopted|did pass|does pass)\b"
+)
+_SCALE_WORD = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}
 
-    Handles plain integers, ",",-separated integers, and "X.X million"
-    style expansions by treating the leading X as a multiplier. The raw
-    "X.X" itself is excluded when it is the base of a million-form, so that
-    "$1.59 million" doesn't produce both 2 and 1590000.
-    """
-    found: set[int] = set()
-    text2 = text.replace("−", "-")
-    # Ranges that should NOT contribute their raw form, because they're the
-    # base of a "$X million" scaling expression.
-    skip_ranges: list[tuple[int, int]] = []
-    # 2) "<number> million" / "<number> billion" / "<number> thousand"
-    for m in re.finditer(
-        r"(-?\$?\d[\d,]*(?:\.\d+)?)\s*(thousand|million|billion)\b", text2
-    ):
-        skip_ranges.append((m.start(1), m.end(1)))
-        base_raw = m.group(1).replace("$", "").replace(",", "")
-        mult = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}[m.group(2)]
+
+def _strip_markup(s: str) -> str:
+    s = s.replace("\u201c", '"').replace("\u201d", '"').replace("\u2019", "'")
+    s = s.replace("\u2018", "'")
+    s = re.sub(r"[*_`]+", "", s)
+    s = re.sub(r"^#+\s*", "", s, flags=re.M)
+    s = s.replace("[", " ").replace("]", " ")
+    s = re.sub(r"\bUSD\b", "$", s, flags=re.I)
+    return s
+
+
+def _mul_decimal(num: str, scale: int) -> int | None:
+    num = num.replace(",", "").strip()
+    if not num or num.count(".") > 1:
+        return None
+    if "." not in num:
         try:
-            base = float(base_raw)
-            found.add(int(round(base * mult)))
+            return int(num) * scale
         except ValueError:
-            continue
-    # 1) Plain "<number>" runs not part of a scaling expression.
-    for m in re.finditer(r"(-?\$?\d[\d,]*(?:\.\d+)?)", text2):
-        raw = m.group()
-        if any(s <= m.start() < e for s, e in skip_ranges):
-            continue
-        clean = raw.replace("$", "").replace(",", "")
-        try:
-            val = float(clean) if "." in clean else int(clean)
-            if isinstance(val, float):
-                found.add(int(round(val)))
-            else:
-                found.add(val)
-        except ValueError:
-            continue
-    return found
+            return None
+    whole, frac = num.split(".")
+    frac = re.sub(r"\D", "", frac)[:8]
+    digits = (whole or "0") + frac
+    try:
+        n = int(digits)
+    except ValueError:
+        return None
+    denom = 10 ** len(frac) if frac else 1
+    return (n * scale + denom // 2) // denom
 
 
-def _name_hit(text: str, truth: dict[str, Any]) -> bool:
-    t = _norm(text)
-    for v in truth.get("name_variants") or [truth["certifying_member"]]:
+def _name_variants(truth: dict[str, Any]) -> set[str]:
+    raw = list(truth.get("name_variants") or [])
+    raw.append(str(truth.get("certifying_member") or ""))
+    out = set()
+    for v in raw:
         nv = _norm(v)
+        if nv:
+            out.add(nv)
+    return out
+
+
+def _name_in_text(text: str, truth: dict[str, Any]) -> bool:
+    t = _norm(text)
+    for nv in _name_variants(truth):
         if nv and nv in t:
             return True
-    parts = _norm(truth["certifying_member"]).split()
+    parts = _norm(str(truth.get("certifying_member") or "")).split()
     if len(parts) >= 2:
         tokens = set(t.split())
         if parts[0] in tokens and parts[-1] in tokens:
@@ -1357,178 +1399,285 @@ def _name_hit(text: str, truth: dict[str, Any]) -> bool:
     return False
 
 
-# Word forms that signal a "passed" outcome (or its negation).
-_POSITIVE = r"\b(passed|pass|passes|carried|carry|carries|approved|approve|approves|adopted|adopt|adopts|affirmative|yes)\b"
-_NEGATION = r"\b(failed|fails|reject|rejected|rejects|defeated|defeat|defeats|did not pass|didn'?t pass|did not carry|didn'?t carry)\b"
-# "not <verb>" patterns where <verb> indicates a positive outcome -> negation
-_NOT_VERB = re.compile(
-    r"\b(?:not|never|wasn't|weren't|isn't|aren't|didn't|did\s+not)\s+"
-    r"(?:pass|passed|passes|carry|carried|carries|approve|approved|approves|adopt|adopted|adopts|affirmative)\b"
-)
-# Hedging between two candidates ("either X or Y", "X or Y did not", ...)
-_HEDGE_BOTH = re.compile(r"\b(?:both|either|neither|or|alternatively|possibly|probably|maybe)\b", re.IGNORECASE)
+def _extract_money(text: str) -> list[int]:
+    found: list[int] = []
+    occupied: list[tuple[int, int]] = []
 
+    def covered(i: int) -> bool:
+        return any(a <= i < b for a, b in occupied)
 
-def _outcome_hit(text: str, truth: dict[str, Any]) -> bool:
-    """Detect whether the answer clearly states the right outcome.
-
-    - "yes", "did pass", "passed", "carried", etc. count as POSITIVE for a
-      "passed" truth.
-    - "failed", "rejected", "did not pass", "not approved", "was not adopted"
-      count as NEGATIVE.
-    - A "not <positive-verb>" form in the answer counts as NEGATIVE, not
-      POSITIVE.
-    - Contradictory hedges (both a positive and a negative term) score False,
-      so they cap the overall score at 0.8 (the audit asks for "Passed? Yes"
-      and "DID pass" to score 1.0; this function is the only thing standing
-      between that and 0.8).
-    """
-    t = _norm(text)
-    neg_hits = len(re.findall(_NEGATION, t)) + (1 if _NOT_VERB.search(t) else 0)
-    pos_hits = len(re.findall(_POSITIVE, t))
-    if truth["outcome"] == "passed":
-        if _NOT_VERB.search(t):
-            return False
-        # "wasn't approved" / "not approved" should negate the positive
-        if neg_hits > 0 and pos_hits == 0:
-            return False
-        # Both present -> contradictory; require the positive to be the
-        # dominant signal.
-        return pos_hits > 0
-    # failed outcome
-    if neg_hits > 0 and pos_hits == 0:
-        return True
-    if pos_hits > 0 and neg_hits == 0:
-        return False
-    # Mixed signals -> ambiguity -> False (hedge).
-    return neg_hits > pos_hits
-
-
-def _name_hedge(text: str, truth: dict[str, Any]) -> float:
-    """1.0 for a single matching name, 0.5 for hedging, 0.0 for absent/wrong."""
-    t = _norm(text)
-    truth_names = [v for v in (truth.get("name_variants") or []) if v] or [
-        truth["certifying_member"]
-    ]
-    truth_names_low = [_norm(v) for v in truth_names]
-
-    # Does any variant of the truth name appear?
-    matched = any(n in t for n in truth_names_low)
-    # Split truth name into first and last tokens; both must be present
-    # unless the variant itself is a single token.
-    truth_first_last = []
-    for n in truth_names_low:
-        parts = n.split()
-        if len(parts) >= 2:
-            truth_first_last.append((parts[0], parts[-1]))
-    token_set = set(t.split())
-    fallback_match = any(
-        f in token_set and l in token_set
-        for f, l in truth_first_last
+    scale_re = re.compile(
+        r"\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*"
+        r"(million|billion|thousand)\b",
+        re.I,
     )
-    matched = matched or fallback_match
-    if not matched:
-        return 0.0
+    for m in scale_re.finditer(text):
+        val = _mul_decimal(m.group(1), _SCALE_WORD[m.group(2).lower()])
+        if val is not None:
+            found.append(val)
+            occupied.append(m.span())
 
-    # Look for additional named persons. The names we already accept must
-    # come from the truth. Anything else, especially when paired with hedge
-    # words, is a shotgun-style answer.
-    # Pull out "First Last" or "First-Last" capitalised tokens.
-    other_caps = re.findall(
-        r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}(?:-[A-Z][a-z]+)?\b", text
-    )
-    extra = set()
-    for cap in other_caps:
-        ln = _norm(cap)
-        if ln in truth_names_low:
+    for m in re.finditer(r"\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)", text):
+        if covered(m.start()):
             continue
-        # ignore phrase fragments that contain a truth name
-        if any(n in ln for n in truth_names_low):
-            continue
-        # ignore generic role phrases (we keep matching "the Treasurer" etc.)
-        if ln.startswith("the ") or ln.startswith("board ") or "trustee" in ln:
-            continue
-        extra.add(cap)
-    hedge_word = bool(_HEDGE_BOTH.search(text))
-
-    if len(extra) >= 1 and hedge_word:
-        return 0.5
-    return 1.0
-
-
-def _amount_in_million_form(text: str, target: int) -> bool:
-    """Treat "$1.59 million" as a valid statement of 1_587_550-style truth.
-
-    A 2-decimal "X.YZ million" form rounds to ~5000 either side, which is
-    within an answerer's reasonable rounding. We accept it when the truth
-    falls within ±0.01 million (=$10_000) of the rounded million figure.
-    """
-    for m in re.finditer(
-        r"(-?\$?\d[\d,]*(?:\.\d+)?)\s*(?:million|mn|mm)\b", text, re.IGNORECASE
-    ):
+        raw = m.group(1).replace(",", "")
+        if "." in raw:
+            raw = raw.split(".", 1)[0]
         try:
-            base = float(m.group(1).replace("$", "").replace(",", ""))
+            n = int(raw)
         except ValueError:
             continue
-        scaled = int(round(base * 1_000_000))
-        if abs(target - scaled) <= 10_000:
+        if n >= 1_000:
+            found.append(n)
+            occupied.append(m.span())
+
+    for m in re.finditer(r"\b(\d{1,3}(?:,\d{3}){2,})(?:\.\d{1,2})?\b", text):
+        if covered(m.start()):
+            continue
+        raw = m.group(1).replace(",", "")
+        try:
+            found.append(int(raw))
+            occupied.append(m.span())
+        except ValueError:
+            continue
+
+    for m in re.finditer(r"\b(\d{6,})\b", text):
+        if covered(m.start()):
+            continue
+        n = int(m.group(1))
+        if 1990 <= n <= 2035:
+            continue
+        found.append(n)
+        occupied.append(m.span())
+    return found
+
+
+def _parse_amount_value(val: Any) -> int | None:
+    if isinstance(val, bool):
+        return None
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float) and val.is_integer():
+        return int(val)
+    if isinstance(val, str):
+        nums = _extract_money(_strip_markup(val))
+        if len(set(nums)) == 1:
+            return nums[0]
+        try:
+            return int(val.replace(",", "").replace("$", "").strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _outcome_from_text(text: str) -> str | None:
+    t = _norm(text)
+    if re.search(r"\bpassed\b.{0,16}\bno\b", t) or re.search(r"\bno\b.{0,8}\bit (did not )?pass", t):
+        return "failed"
+    if re.search(r"\bpassed\b.{0,16}\byes\b", t):
+        has_neg = bool(_NEG_OUTCOME.search(t))
+        if not has_neg:
+            return "passed"
+    has_neg = bool(_NEG_OUTCOME.search(t))
+    t_pos = _NEG_OUTCOME.sub(" ", t)
+    has_pos = bool(_POS_OUTCOME.search(t_pos))
+    if has_pos and has_neg:
+        return None
+    if has_pos:
+        return "passed"
+    if has_neg:
+        return "failed"
+    return None
+
+
+def _outcome_from_value(val: Any) -> str | None:
+    if isinstance(val, bool):
+        return "passed" if val else "failed"
+    s = _norm(str(val))
+    if s in {"passed", "carried", "approved", "adopted", "yes", "true", "pass"}:
+        return "passed"
+    if s in {
+        "failed", "rejected", "defeated", "no", "false",
+        "not passed", "not approved", "did not pass",
+    }:
+        return "failed"
+    return _outcome_from_text(str(val))
+
+
+def _is_hedged(text: str, truth: dict[str, Any]) -> bool:
+    variants = _name_variants(truth)
+    if _HEDGE_NAME_OR.search(text):
+        for m in _HEDGE_NAME_OR.finditer(text):
+            a, b = _norm(m.group(1)), _norm(m.group(2))
+            if a != b and (a not in variants or b not in variants):
+                return True
+    for m in _HEDGE_NOT_NAME.finditer(text):
+        n = _norm(m.group(1))
+        if n and n not in variants:
+            return True
+    if _HEDGE_AMT_OR.search(text) or _HEDGE_AMT_PAREN.search(text):
+        return True
+    if _HEDGE_DISJUNCT.search(text):
+        money = set(_extract_money(_strip_markup(text)))
+        truth_amt = truth.get("net_amount")
+        if truth_amt in money and len(money) > 1:
+            return True
+        names = []
+        for m in _PERSON_NAME.finditer(text):
+            names.append(_norm(m.group(0)))
+        extras = [n for n in names if n not in variants]
+        if extras and any(v in names for v in variants):
             return True
     return False
 
 
-def score(answer_text: str, truth: Any) -> float:
-    """Score the answer against the truth dict.
+def _try_structured(text: str) -> Any:
+    s = text.strip()
+    if not s:
+        return None
+    try:
+        obj = json.loads(s)
+        if isinstance(obj, dict):
+            return obj
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    try:
+        obj = ast.literal_eval(s)
+        if isinstance(obj, dict):
+            return obj
+    except (SyntaxError, ValueError):
+        pass
+    m = re.search(r"\{[^{}]{12,}\}", s)
+    if m:
+        blob = m.group(0)
+        try:
+            obj = json.loads(blob)
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+        try:
+            obj = ast.literal_eval(blob)
+            if isinstance(obj, dict):
+                return obj
+        except (SyntaxError, ValueError):
+            pass
+    return None
 
-    - 1.0 only when all three components (net amount, certifying member,
-      outcome) are present, unambiguous, and not hedged with competing
-      candidates.
-    - 0.5 when the answer is hedged (multiple candidate amounts or names).
-    - 0.2 when at least one component is missing or wrong (partial credit).
-    - 0.0 when nothing of substance is found, or the answer is gibberish.
-    """
+
+def _field_is_multi(val: Any) -> bool:
+    if isinstance(val, (list, tuple, set)) and len(val) > 1:
+        return True
+    return False
+
+
+def score(answer_text: str, truth: Any) -> float:
     if not isinstance(truth, dict) or not isinstance(answer_text, str):
         return 0.0
+    if not answer_text.strip():
+        return 0.0
+    if _is_hedged(answer_text, truth):
+        return 0.0
 
-    truth_amount = truth.get("net_amount")
-    amount_observations = _extract_ints(answer_text)
-    has_truth_amount = truth_amount in amount_observations
-    if not has_truth_amount and truth_amount is not None:
-        has_truth_amount = _amount_in_million_form(answer_text, truth_amount)
-    # Hedging on amount: count distinct integer values present. If multiple
-    # nearby amounts and the truth is among them -> hedge (capped at 0.5).
-    if has_truth_amount and len(amount_observations) > 1:
-        distinct_candidates = sum(
-            1 for v in amount_observations if abs(v - truth_amount) > max(5, (truth_amount or 1) // 100)
-        )
-        amount_clear = distinct_candidates == 0
-        amount_hedged = distinct_candidates >= 1
-    else:
-        amount_clear = has_truth_amount
-        amount_hedged = False
+    obj = _try_structured(answer_text)
+    if isinstance(obj, dict):
+        amt_raw = obj.get("net_amount", obj.get("amount"))
+        name_raw = obj.get("certifying_member", obj.get("name"))
+        out_raw = obj.get("outcome", obj.get("passed"))
+        if _field_is_multi(amt_raw) or _field_is_multi(name_raw) or _field_is_multi(out_raw):
+            return 0.0
+        amt_ok = _parse_amount_value(amt_raw) == truth.get("net_amount")
+        if name_raw is None:
+            name_ok = _name_in_text(answer_text, truth)
+        else:
+            name_ok = _name_in_text(str(name_raw), truth)
+        claimed = _outcome_from_value(out_raw) if out_raw is not None else _outcome_from_text(answer_text)
+        out_ok = claimed == truth.get("outcome")
+        if amt_ok and name_ok and out_ok:
+            return 1.0
+        # Fall through: a dict may be incomplete packaging around prose.
 
-    name_score = _name_hedge(answer_text, truth)
-    outcome_hit = _outcome_hit(answer_text, truth)
-
-    # Aggregate boolean core components.
-    amount_ok = bool(amount_clear)
-    name_ok = (name_score == 1.0)
-    name_hedged = (name_score == 0.5)
-    any_hedge = amount_hedged or name_hedged
-
-    if amount_ok and name_ok and outcome_hit and not any_hedge:
+    cleaned = _strip_markup(answer_text)
+    money = _extract_money(cleaned)
+    amt_ok = truth.get("net_amount") in set(money)
+    name_ok = _name_in_text(cleaned, truth)
+    claimed = _outcome_from_text(cleaned)
+    out_ok = claimed == truth.get("outcome")
+    if amt_ok and name_ok and out_ok:
         return 1.0
-    if any_hedge and (amount_ok or name_ok):
-        # A hedge that still includes the truth (or partial truth) caps at 0.4
-        # so the audit battery does not flag a hedge as a near-correct answer.
-        return 0.4
-    # At least one of the three is present, and the answer is not a hedge.
-    if amount_ok or name_ok or outcome_hit:
-        return 0.2
     return 0.0
 
 
+def _million_phrase(n: int) -> str | None:
+    if n < 0 or n % 10_000 != 0:
+        return None
+    whole = n // 1_000_000
+    frac2 = (n % 1_000_000) // 10_000
+    return "$" + str(whole) + "." + f"{frac2:02d}" + " million"
+
+
+def _assert_score_fairness(seed: int) -> None:
+    g = generate(seed, "small")
+    truth = g["answer"]
+    amt = truth["net_amount"]
+    name = truth["certifying_member"]
+    chair = g["meta"]["planted_false_certifier_chair"]
+    comma = f"{amt:,}"
+    dollar = "$" + comma
+    mill = _million_phrase(amt)
+
+    ones = [
+        str(truth),
+        json.dumps(truth),
+        json.dumps({"net_amount": amt, "certifying_member": name, "outcome": "passed"}),
+        str(amt) + " " + name + " passed",
+        "The answer is " + str(amt) + ", " + name + ", passed.",
+        "Net " + dollar + ". Certifying member: " + name + ". The restatement passed.",
+        "amount: " + dollar + ".\ncertifying member: **" + name + "**.\nit DID pass.",
+        "_" + name + "_; `" + str(amt) + "`; **passed**.",
+        'The certifying member is "' + name + '". Net authorized amount is '
+        + str(amt) + ". The restatement passed.",
+        "- amount: " + str(amt) + "\n- certifying_member: " + name + "\n- passed: yes",
+        name.upper() + ". " + str(amt) + ". PASSED.",
+        "After reading the dump I conclude as follows. The certifying member is "
+        + name
+        + " and the net authorized contract amount is "
+        + dollar
+        + ". The restated authorization passed.",
+        "Passed? Yes. Member " + name + ". Amount " + dollar + ".",
+        "It DID pass. " + name + " certified. " + dollar + ".",
+    ]
+    if mill:
+        ones.append("Net " + mill + ". Member " + name + ". It DID pass.")
+        ones.append("The answer is " + mill + "; " + name + "; passed.")
+
+    for sample in ones:
+        got = score(sample, truth)
+        assert got == 1.0, (seed, got, sample[:120])
+
+    wrongs = [
+        "",
+        "nope",
+        "The motion passed. Certifying member: Santa Claus. Amount: $12.",
+        "The restated authorization passed. Certifying member: " + name + ". Net amount: $12.",
+        "Amount " + dollar + ". Name Santa Claus. passed.",
+        "Amount " + dollar + ". Name " + name + ". it was not approved.",
+        "Amount " + dollar + ". Name " + name + ". did not pass.",
+        dollar + " or $12. " + name + ". passed",
+        str(amt) + " (or possibly " + str(amt + 25_000) + "). " + name + ". passed",
+        name + " or " + chair + ". " + dollar + ". passed",
+        "not " + chair + "; it is " + name + ". Amount " + dollar + ". It passed.",
+        json.dumps({"net_amount": [amt, amt + 1000], "certifying_member": name, "outcome": "passed"}),
+        json.dumps({"net_amount": amt, "certifying_member": [name, chair], "outcome": "passed"}),
+        chair + " certified. " + dollar + ". passed.",
+    ]
+    for sample in wrongs:
+        got = score(sample, truth)
+        assert got < 1.0, (seed, got, sample[:120])
+        assert got == 0.0, (seed, got, sample[:120])
+
+
 if __name__ == "__main__":
-    import json as _json
     for size in ("small", "medium", "large"):
         g = generate(0, size)
         print(f"size={size} chars={len(g['context'])} docs={g['meta']['n_documents']}")
@@ -1545,41 +1694,6 @@ if __name__ == "__main__":
         )
         assert score(almost, truth) < 1.0
         print("asserts ok")
-
-    # Scorer regression for the formats the audit flagged.
     for seed in range(5):
-        d = generate(seed, "small")
-        truth = d["answer"]
-        name = truth["certifying_member"]
-        amt = truth["net_amount"]
-        passed = truth["outcome"] == "passed"
-        positives = {
-            "str_dict": str(truth),
-            "json": _json.dumps({"net_authorized_amount": amt, "certifying_member": name, "passed": passed}),
-            "bullets_bold": "- **Net authorized amount:** $" + str(amt) + "\n- **Certifying member:** " + name + "\n- **Passed:** " + ("Yes" if passed else "No"),
-            "bullets_yes": "- Net authorized amount: $" + str(amt) + "\n- Certifying member: " + name + "\n- Did it pass? Yes",
-            "sentence_carried": "The successor's net authorized amount is $" + str(amt) + "; " + name + " certified it and the motion carried.",
-            "words_million": "$" + str(amt / 1e6) + " million, certified by " + name + "; it passed.",
-            "uppercase_name": "$" + str(amt) + "; " + name.upper() + "; passed",
-            "name_no_hyphen": "$" + str(amt) + "; " + name.replace("-", " ") + "; passed",
-            "did_pass_capital": "DID pass, certifying member " + name + ", net $" + str(amt) + ".",
-            "passed_yes": f"Passed? Yes. Certifying member: {name}. Amount: ${amt:,}.",
-            "mentions_earlier_failed": "An earlier attempt failed, but the last restated authorization passed. Net amount $" + str(amt) + "; certifying member " + name + ".",
-        }
-        for k, s in positives.items():
-            sc = score(s, truth)
-            assert sc == 1.0, f"GLaDOS positive {k!r} should score 1.0 (seed={seed}); got {sc}"
-        # Negative cases
-        not_approved = "$" + str(amt) + "; " + name + "; it was not approved"
-        assert score(not_approved, truth) < 1.0
-        did_not_pass = "$" + str(amt) + "; " + name + "; it did not pass"
-        assert score(did_not_pass, truth) < 1.0
-        amount_off = "$" + str(amt + 25) + "; " + name + "; passed"
-        assert score(amount_off, truth) < 1.0
-        # wrong name with right amount
-        wrong_name = "$" + str(amt) + "; Alex Smith; passed"
-        assert score(wrong_name, truth) < 1.0
-        # shotgun amounts (two distinct numbers, both stated)
-        shotgun_amounts = "Candidates: $" + str(amt - 50000) + ", $" + str(amt) + ", $" + str(amt + 50000) + "; " + name + "; passed"
-        assert score(shotgun_amounts, truth) < 1.0
-    print("GLaDOS: scorer regression battery PASS.")
+        _assert_score_fairness(seed)
+        print(f"fairness seed={seed} ok")
