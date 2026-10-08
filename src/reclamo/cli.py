@@ -17,7 +17,14 @@ import openai
 
 from reclamo import __version__
 from reclamo.client import LMClient
-from reclamo.config import APIKeyError, ConfigError, RLMConfig, load_config, resolve_api_keys
+from reclamo.config import (
+    PLANNER_STYLES,
+    APIKeyError,
+    ConfigError,
+    RLMConfig,
+    load_config,
+    resolve_api_keys,
+)
 from reclamo.errors import RLMError
 from reclamo.repl import DockerUnavailable
 
@@ -69,6 +76,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="how the root model acts: fenced code + FINAL text (fence, the default) or "
         "execute_python / final_answer tool calls (tools)",
+    )
+    run.add_argument(
+        "--planner-style",
+        choices=PLANNER_STYLES,
+        default=None,
+        help="root prompt and turn format: ours (reclamo, the default) or the upstream "
+        "alexzhang13/rlm scaffold RLM-Qwen3-8B was trained on (upstream-rlm-v0)",
     )
     run.set_defaults(func=cmd_run)
     return parser
@@ -190,8 +204,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         overrides["sandbox"] = args.sandbox
     if args.protocol:
         overrides["protocol"] = args.protocol
+    if args.planner_style:
+        overrides["planner_style"] = args.planner_style
     if overrides:
-        cfg = dataclasses.replace(cfg, **overrides)
+        try:
+            cfg = dataclasses.replace(cfg, **overrides)
+        except ConfigError as exc:
+            print(f"reclamo run: {exc}", file=sys.stderr)
+            return EXIT_CONFIG
         client.cfg = cfg
 
     try:

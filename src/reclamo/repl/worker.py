@@ -71,6 +71,7 @@ class Worker:
         self.subcalls_this_exec = 0
         self.context: Any = None
         self.reserved: dict[str, Any] = {}
+        self.answer_dict = True
 
     # --- lifecycle --------------------------------------------------------
 
@@ -89,7 +90,13 @@ class Worker:
             "SHOW_VARS": self.show_vars,
             "FINAL_VAR": self.final_var,
         }
-        self.ns = {"__name__": "__main__", "__builtins__": builtins, "answer": {}}
+        # The `answer` dict is ours. planner_style "upstream-rlm-v0" turns it off:
+        # that scaffold has no such dict, and its prompt's own example does
+        # `answer = llm_query(...)`, which must stay an ordinary variable.
+        self.answer_dict = bool(msg.get("answer_dict", True))
+        self.ns = {"__name__": "__main__", "__builtins__": builtins}
+        if self.answer_dict:
+            self.ns["answer"] = {}
         self.ns.update(self.reserved)
         self.proto.send(
             {
@@ -181,7 +188,7 @@ class Worker:
         """Print the variables created so far with their types and sizes."""
         rows = []
         for name, value in sorted(self.ns.items()):
-            if name in self.reserved or name.startswith("_") or name == "answer":
+            if name in self.reserved or name.startswith("_") or self._is_answer(name):
                 continue
             if isinstance(value, types.ModuleType | types.FunctionType | type):
                 continue
@@ -245,6 +252,9 @@ class Worker:
             "subcalls": self.subcalls_this_exec,
         }
 
+    def _is_answer(self, name: str) -> bool:
+        return self.answer_dict and name == "answer"
+
     def _restore_reserved(self) -> None:
         for name, value in self.reserved.items():
             if name == "context":
@@ -252,10 +262,12 @@ class Worker:
                     self.ns["context"] = value
             elif self.ns.get(name) is not value:
                 self.ns[name] = value
-        if not isinstance(self.ns.get("answer"), dict):
+        if self.answer_dict and not isinstance(self.ns.get("answer"), dict):
             self.ns["answer"] = {}
 
     def _answer_state(self) -> dict[str, Any] | None:
+        if not self.answer_dict:
+            return None
         answer = self.ns.get("answer")
         if not isinstance(answer, dict) or not answer:
             return None
@@ -268,7 +280,7 @@ class Worker:
     def _user_vars(self) -> list[str]:
         names = []
         for name, value in self.ns.items():
-            if name in self.reserved or name == "answer" or name.startswith("_"):
+            if name in self.reserved or self._is_answer(name) or name.startswith("_"):
                 continue
             if isinstance(value, types.ModuleType):
                 continue

@@ -157,6 +157,91 @@ Non-standard sampling keys such as `top_k` and `min_p` are sent in the request b
 and `enable_thinking` goes out as `chat_template_kwargs`, which Strata and vLLM-style
 servers honour.
 
+#### Using the paper's RLM-Qwen3-8B as planner
+
+The paper's authors released their fine-tuned planner,
+[`mit-oasys/rlm-qwen3-8b-v0.1`](https://huggingface.co/mit-oasys/rlm-qwen3-8b-v0.1)
+(MIT; uploaded 2026-01-15). The model card says it "was trained on trajectories produced
+using a fixed system prompt" and "assumes the environment/scaffold from our RLM repo".
+`planner_style = "upstream-rlm-v0"` makes the root speak that format, so the checkpoint can
+plan here without retraining (issue [#43](https://github.com/CryptoJones/ReCLamO-Harness/issues/43),
+epic [#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42) decision 7). Sub-calls
+still go to the reader endpoint, and our sandbox, sub-call caps, nudges, compaction, forced
+finish and logging all stay on. The default style stays `reclamo`.
+
+What the style reproduces, and where it comes from:
+
+| Piece | Upstream format | Source |
+| --- | --- | --- |
+| System prompt | the paper's Qwen3-8B / 32K prompt: the GPT-5 prompt (1a) with the (1c) diff applied (32K warning, `llm_query` "~100k chars", batching rule, `context[:1000]`, a line-start `FINAL_VAR(final_answer)` example, "NOT in code or repl tags"); no `llm_query_batched` | [arXiv 2512.24601 v2](https://arxiv.org/abs/2512.24601v2) (2026-01-28) App. C.1 |
+| Message order | `system`, then the context metadata as an **assistant** message (`Your context is a str with N total characters, and is broken up into chunks of char lengths: [...]`), then per turn the assistant reply and one user message per executed block | [alexzhang13/rlm `v1.0.0`](https://github.com/alexzhang13/rlm/tree/18a936836103b62ed35770ed7001c22f114aea9a) (`18a9368`, 2026-01-12), `rlm/utils/prompts.py`, `rlm/core/rlm.py` |
+| Per-turn prompt | `USER_PROMPT_WITH_ROOT` with the query, plus the "You have not interacted with the REPL environment..." safeguard on turn 1 and "The history before is your previous interactions..." after; sent every turn, never stored | same, `build_user_prompt` |
+| Code | ```` ```repl ```` fences (we also accept ```` ```python ````) | same, `rlm/utils/parsing.py` |
+| REPL output | `Code executed:\n```python\n<code>\n```\n\nREPL output:\n` + stdout, stderr and `REPL variables: [...]`, cut at 20,000 chars with `... + [N chars...]` | same, `format_iteration`, `format_execution_result` |
+| Finish | `FINAL(...)` / `FINAL_VAR(name)` at the start of a line; a `FINAL_VAR` in the same reply as code is read after the code runs, as upstream does | same, `find_final_answer` |
+
+The prompt text is copied verbatim (with upstream's copyright and MIT notice beside it) in
+`src/reclamo/upstream.py`. What is adapted: the variable list shows `context` and our user
+variables (our REPL has no `context_0`); an exception's line carries its line number; our
+nudges (a rejected `FINAL`, no action, re-verify, decompose) arrive as their own user message
+after the outputs; the forced finish restates the query, which this style never stores; and
+the `answer` dict is switched off so `answer = llm_query(...)`, as in the prompt's own
+example, is an ordinary variable. The tools protocol is not available with this style.
+
+This profile is not built in. The planner runs on a local llama.cpp server with the community
+GGUF [`cameronbergh/rlm-qwen3-8b-v0.1-gguf`](https://huggingface.co/cameronbergh/rlm-qwen3-8b-v0.1-gguf)
+(`q8_0` or `f16`), for example `llama-server -m rlm-qwen3-8b-v0.1-q8_0.gguf --jinja -c 32768
+--port 8080`; the reader is pluto. The URL and model name are placeholders:
+
+```toml
+[profiles.rlm-qwen3-8b]         # profile level = the reader (pluto)
+base_url = "http://pluto:8083/v1"
+api_key_cmd = "pass pluto/flashnext-api-key"
+concurrency = 1
+context_tokens = 32768
+planner_style = "upstream-rlm-v0"
+output_truncate_chars = 20000   # upstream cuts each block's output at 20,000 chars
+
+[profiles.rlm-qwen3-8b.root]    # the paper's planner, on a local llama.cpp server
+base_url = "http://localhost:8080/v1"
+api_key_env = "RECLAMO_PLANNER_API_KEY"  # any value if the local server ignores keys
+concurrency = 1
+model = "rlm-qwen3-8b-v0.1"              # placeholder
+max_tokens = 4096
+enable_thinking = false
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, min_p = 0.0 }
+
+[profiles.rlm-qwen3-8b.sub]     # the reader: inherits pluto's URL, key and concurrency
+model = "qwen3.8-flash-next"
+max_tokens = 2048
+enable_thinking = false
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
+```
+
+`reclamo run --profile rlm-qwen3-8b ...` uses it; `--planner-style upstream-rlm-v0` selects
+the style on any profile.
+
+Sampling and thinking: the model card and `generation_config.json` give no sampling values.
+The checkpoint ships a Qwen3-Coder-style chat template with no thinking switch, and it was
+distilled from Qwen3-Coder-480B-A35B-Instruct, a non-thinking model, so thinking is off and the
+sampling is Qwen3's non-thinking preset (temperature 0.7, top_p 0.8, top_k 20, min_p 0).
+
+Caveats:
+
+- The exact training prompt is not public. The checkpoint's training code was never released
+  (the repo's `training/` harness, added 2026-05-24, is for the later 30B model and the newer
+  answer-dict format). The paper says the 8B experiment used the (1c) prompt; its listing puts
+  the context-metadata line inside the system prompt, while the repo sends it as an assistant
+  message. This style follows the repo, which the model card points to. Where the (1c) diff
+  inserts the bare `FINAL_VAR(final_answer)` line is reconstructed from the hunk offsets.
+- The trajectories were Qwen3-Coder-480B's, sampled on LongBenchPro, with sub-calls answered by
+  Qwen3-8B. Here the reader is Flash-Next, whose answers will read differently.
+- The prompt advertises `llm_query` at "~100k chars". Our per-block and per-run sub-call caps
+  still apply, and a block that exceeds them gets an error, which the checkpoint never saw.
+- 20,000-character outputs are large for a 32K window; compaction elides old outputs when the
+  history nears `context_tokens`. Lower `output_truncate_chars` if the planner runs out of room.
+- Not yet run against a hosted copy: that smoke run is [#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40).
+
 ### Trajectories and the SFT log
 
 Every run writes `runs/<UTC timestamp>-<id>.jsonl`, one JSON object per line:

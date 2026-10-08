@@ -8,6 +8,11 @@ license requires.
 
 <https://github.com/alexzhang13/rlm>
 
+`src/reclamo/upstream.py` copies prompt strings verbatim from this project at tag
+`v1.0.0` (commit `18a936836103b62ed35770ed7001c22f114aea9a`), whose LICENSE reads
+"Copyright (c) 2025 Alex Zhang"; that module repeats the notice beside the strings.
+The license text below is otherwise the same.
+
 ```
 MIT License
 
