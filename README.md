@@ -109,8 +109,49 @@ enable_thinking = false
 sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
 ```
 
-Environment overrides apply to any profile: `RECLAMO_BASE_URL`, `RECLAMO_MODEL`
-(sets both roles) and `RECLAMO_API_KEY`. When `RECLAMO_API_KEY` is unset the key
+#### Per-role endpoints: a small planner with a separate reader
+
+The root (planner) and sub (reader) roles can talk to different servers. Each role
+table may set `base_url`, `api_key_env`, `api_key_cmd` and `concurrency`; anything it
+leaves out inherits the profile-level value, so existing profiles are unchanged. Each
+distinct `base_url` gets its own HTTP client, key and semaphore: sub-calls to pluto
+are not queued behind root turns on another host, while roles that share a URL still
+share one semaphore (pluto stays one request at a time). Roles that share a URL must
+agree on the key source and concurrency. `reclamo ping` checks every endpoint in the
+profile and reports each one under its own `base_url:` heading.
+
+This profile is not built in. It shows the shape for a locally hosted Qwen3-8B
+planner (epic [#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42)) driving
+the harness, with pluto's Flash-Next answering the sub-calls. The planner model name
+is a placeholder until the trained adapter exists:
+
+```toml
+[profiles.planner-8b]        # profile level = the reader (pluto), as in [profiles.pluto]
+base_url = "http://pluto:8083/v1"
+api_key_cmd = "pass pluto/flashnext-api-key"
+concurrency = 1
+context_tokens = 32768
+
+[profiles.planner-8b.root]   # the planner, on a local server
+base_url = "http://localhost:8080/v1"
+api_key_env = "RECLAMO_PLANNER_API_KEY"  # any value if the local server ignores keys
+concurrency = 1
+model = "qwen3-8b-rlm"                   # placeholder
+max_tokens = 4096
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 0.6, top_p = 0.95, top_k = 20, min_p = 0.0 }
+
+[profiles.planner-8b.sub]    # the reader: inherits pluto's URL, key and concurrency
+model = "qwen3.8-flash-next"
+max_tokens = 2048
+enable_thinking = false
+sampling = { temperature = 0.7, top_p = 0.8, top_k = 20, presence_penalty = 1.0 }
+```
+
+Environment overrides apply to any profile: `RECLAMO_BASE_URL` (one URL for every
+role; it replaces per-role `base_url`s too), `RECLAMO_MODEL` (sets both roles) and
+`RECLAMO_API_KEY`. When `RECLAMO_API_KEY` is unset the key
 comes from the profile's `api_key_cmd` (`pass pluto/flashnext-api-key` for pluto).
 Non-standard sampling keys such as `top_k` and `min_p` are sent in the request body,
 and `enable_thinking` goes out as `chat_template_kwargs`, which Strata and vLLM-style
@@ -120,11 +161,14 @@ servers honour.
 
 Every run writes `runs/<UTC timestamp>-<id>.jsonl`, one JSON object per line:
 
-- `metadata` — profile (never the key), query, context shape, depth
+- `metadata` — profile (never the key), query, context shape, depth, and `endpoints`
+  (each distinct `base_url`, the roles it serves and its concurrency)
 - `iteration` — turn number, the model's content, its reasoning as a separate field,
-  the code blocks, each block's result, any nudges, and the FINAL decision
+  the code blocks, each block's result, any nudges, the FINAL decision, and the
+  `endpoint` and `model` that served the turn
 - `subcall` — depth, kind (`llm_query`, `llm_query_batched`, `rlm_query`), prompt and
-  answer sizes, latency, running count
+  answer sizes, latency, running count, and the `endpoint` and `model` that answered
+  (absent for an `rlm_query` that recursed; the child's own turns carry them)
 - `compaction` — when older REPL outputs were elided from the history
 - `forced_finish` and `final` — how the run ended. `forced_finish.source` says where a
   forced answer came from: `model` (a valid `FINAL` / `FINAL_VAR` / `final_answer` in

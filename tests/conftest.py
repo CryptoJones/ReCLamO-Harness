@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import threading
 import time
@@ -59,6 +60,9 @@ class FakeServer:
     requests: list[Recorded] = field(default_factory=list)
     base_url: str = ""
     max_in_flight: int = 0
+    # When set, chat handlers block until it is set (deterministic overlap tests).
+    gate: threading.Event | None = None
+    entered: threading.Event = field(default_factory=threading.Event)
     _in_flight: int = 0
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
@@ -66,8 +70,9 @@ class FakeServer:
         self.chat_script.extend(items)
 
 
-@pytest.fixture
-def fake_server() -> Iterator[FakeServer]:
+@contextlib.contextmanager
+def serve_fake() -> Iterator[FakeServer]:
+    """Run one scripted fake server on 127.0.0.1 for the duration of the block."""
     state = FakeServer()
 
     class Handler(BaseHTTPRequestHandler):
@@ -110,7 +115,10 @@ def fake_server() -> Iterator[FakeServer]:
             with state._lock:
                 state._in_flight += 1
                 state.max_in_flight = max(state.max_in_flight, state._in_flight)
+            state.entered.set()
             try:
+                if state.gate is not None:
+                    state.gate.wait(10)
                 if state.handler_delay:
                     time.sleep(state.handler_delay)
                 if not self.path.endswith("/chat/completions"):
@@ -135,6 +143,19 @@ def fake_server() -> Iterator[FakeServer]:
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.fixture
+def fake_server() -> Iterator[FakeServer]:
+    with serve_fake() as state:
+        yield state
+
+
+@pytest.fixture
+def fake_server_b() -> Iterator[FakeServer]:
+    """A second, independent fake server (per-role endpoint tests)."""
+    with serve_fake() as state:
+        yield state
 
 
 def make_config(base_url: str, **overrides: Any) -> RLMConfig:

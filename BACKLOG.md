@@ -5,6 +5,15 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ## Open
 
+### Epic: Trained small planner — Qwen3-8B LoRA as the RLM root, Flash-Next as the reader ([#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42))
+
+- [ ] Per-role endpoints: small planner (root) + Flash-Next reader (sub-calls) ([#36](https://github.com/CryptoJones/ReCLamO-Harness/issues/36))
+- [ ] Practice task suite (never the exam): diverse long-context generators for training data ([#37](https://github.com/CryptoJones/ReCLamO-Harness/issues/37))
+- [ ] Teacher trajectories: collect and filter correct RLM runs into an SFT dataset ([#38](https://github.com/CryptoJones/ReCLamO-Harness/issues/38))
+- [ ] LoRA SFT of Qwen3-8B on RunPod ([#39](https://github.com/CryptoJones/ReCLamO-Harness/issues/39))
+- [ ] Host the trained planner locally and add a profile ([#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40))
+- [ ] Final exam: trained planner vs current harness vs plain model on the frozen independent tests ([#41](https://github.com/CryptoJones/ReCLamO-Harness/issues/41))
+
 ### Follow-ups from v0.1
 
 - [ ] Real benchmark: repeated runs on OOLONG / long-context QA ([#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19))

@@ -268,6 +268,10 @@ class RLM:
             query=query,
             context=dataclasses.asdict(meta),
             config=dataclasses.asdict(cfg),
+            endpoints=[
+                {"base_url": ep.base_url, "roles": list(ep.roles), "concurrency": ep.concurrency}
+                for ep in cfg.endpoints()
+            ],
         )
         repl = self._repl_factory(cfg, self._handle_subcall)
         repl.start(context, kind)
@@ -744,6 +748,7 @@ class RLM:
             self._turn_max_prompt = max(self._turn_max_prompt, prompt_chars)
             t0 = time.monotonic()
             recurse = kind == "rlm_query" and self.depth + 1 < cfg.max_depth
+            served: dict[str, Any] = {}
             if recurse:
                 child = RLM(
                     cfg,
@@ -762,6 +767,7 @@ class RLM:
                 completion = self.client.complete([{"role": "user", "content": prompt}], "sub")
                 budget.add(completion)
                 answer = completion.content
+                served = self._served(completion, "sub")
             latency = time.monotonic() - t0
             self.logger.subcall(
                 depth=self.depth,
@@ -771,6 +777,7 @@ class RLM:
                 answer_chars=len(answer),
                 latency=round(latency, 3),
                 run_subcalls=budget.subcalls,
+                **served,
             )
             self.printer.subcall(kind, prompt_chars, len(answer), latency)
             answers.append(answer)
@@ -895,6 +902,7 @@ class RLM:
             content=content,
             reasoning=completion.reasoning,
             tool_calls=[dataclasses.asdict(c) for c in completion.tool_calls or []],
+            **self._served(completion, "root"),
             **detail,
         )
         return self._finish(answer, stop, iterations, started)
@@ -955,8 +963,16 @@ class RLM:
             final=decision,
             usage=dataclasses.asdict(completion.usage) if completion.usage else None,
             latency=round(completion.latency, 3),
+            **self._served(completion, "root"),
             **extra,
         )
+
+    def _served(self, completion: Completion, role: str) -> dict[str, Any]:
+        """Which endpoint and model served a call (served id, else the requested one)."""
+        return {
+            "endpoint": completion.endpoint or self.cfg.endpoint(role).base_url,
+            "model": completion.model or self.cfg.role(role).model,
+        }
 
     def _log_tool_turn(
         self,
@@ -1016,6 +1032,7 @@ class RLM:
             return  # nothing old enough to drop; the model keeps its recent turns
 
         summarized = False
+        summary_served: dict[str, Any] = {}
         if estimate() > limit:
             body = "\n\n".join(f"--- turn {t} ---\n{text}" for t, text in elided)
             prompt = (
@@ -1026,6 +1043,7 @@ class RLM:
             )
             completion = self.client.complete([{"role": "user", "content": prompt}], "sub")
             self._budget_add(completion)
+            summary_served = self._served(completion, "sub")
             first, last = elided[0][0], elided[-1][0]
             history[old[0]] = {
                 **history[old[0]],
@@ -1045,6 +1063,7 @@ class RLM:
             after_tokens=round(after),
             elided_turns=[t for t, _ in elided],
             summarized=summarized,
+            **{f"summary_{k}": v for k, v in summary_served.items()},
         )
         self.printer.note(
             f"compacted history: {round(before)} -> {round(after)} est. tokens; "
