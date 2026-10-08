@@ -239,15 +239,20 @@ def final_rejection(reason: str, protocol: str = "fence") -> str:
 
 
 def forced_final_prompt(why: str = "turns", protocol: str = "fence") -> str:
-    """``why`` is "turns" or "time"."""
+    """``why`` is "turns", "time" or "errors" (``max_errors`` failed runs in a row)."""
+    lead = (
+        "Your code has failed too many times in a row, so the run stops here."
+        if why == "errors"
+        else f"You are out of {why}."
+    )
     if protocol == "tools":
         return (
-            f"You are out of {why}. Call final_answer now with your best answer, or with "
+            f"{lead} Call final_answer now with your best answer, or with "
             "`variable` set to the name of a variable that already holds it. No "
             "execute_python."
         )
     return (
-        f"You are out of {why}. Reply now with your best answer as `FINAL(<answer>)`, "
+        f"{lead} Reply now with your best answer as `FINAL(<answer>)`, "
         "or `FINAL_VAR(<name>)` if a variable already holds it. No code."
     )
 

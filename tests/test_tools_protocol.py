@@ -10,7 +10,6 @@ import pytest
 
 from reclamo.client import LMClient
 from reclamo.config import ConfigError, ModelConfig, RLMConfig
-from reclamo.errors import RLMErrorLimit
 from reclamo.logger import TrajectoryLogger
 from reclamo.prompts import build_tools_system_prompt, forced_final_prompt, tool_specs
 from reclamo.rlm import RLM
@@ -283,11 +282,22 @@ def test_per_run_subcall_cap_still_enforced() -> None:
     )
 
 
-def test_error_limit_still_enforced() -> None:
+def test_error_limit_still_enforced_through_the_forced_finish() -> None:
     cfg = _cfg(max_errors=2)
-    lm = MockLM([tool_turn(py("1 / 0")), tool_turn(py("undefined_name")), "unused"])
-    with pytest.raises(RLMErrorLimit):
-        RLM(cfg, lm).completion(CONTEXT, "?")
+    lm = MockLM(
+        [
+            tool_turn(py("result = 'kept'")),
+            tool_turn(py("1 / 0")),
+            tool_turn(py("undefined_name"), call("final_answer", answer="ignored")),
+            tool_turn(py("print('never runs')")),
+        ]
+    )
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason, result.iterations) == ("kept", "error_limit", 3)
+    forced = lm.root_calls[3]
+    assert forced["tools"] is not None
+    assert forced["messages"][-1]["content"].endswith(forced_final_prompt("errors", "tools"))
+    assert_valid_history(forced["messages"])  # every tool call got its answer
 
 
 def test_forced_finish_falls_back_to_existing_value() -> None:

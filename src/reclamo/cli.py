@@ -259,7 +259,9 @@ def cmd_run(args: argparse.Namespace) -> int:
                 f"{result.elapsed:.1f}s; trajectory: {logger.path}]",
                 file=sys.stderr,
             )
-    return EXIT_OK
+    # The error limit now ends in a forced finish (issue #50) and returns an answer, but
+    # it is still a limit stopping the run, so the exit code stays EXIT_LIMIT.
+    return EXIT_LIMIT if result.stop_reason == "error_limit" else EXIT_OK
 
 
 def _short(exc: BaseException) -> str:

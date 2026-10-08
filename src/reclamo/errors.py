@@ -16,7 +16,12 @@ class RLMTimeout(RLMError):
 
 
 class RLMErrorLimit(RLMError):
-    """``max_errors`` consecutive REPL executions failed."""
+    """``max_errors`` consecutive REPL executions failed.
+
+    The RLM loop no longer raises this: since issue #50 the error limit ends in the
+    forced finish and returns ``stop_reason="error_limit"``. Kept for callers that
+    import or catch it.
+    """
 
 
 class RLMTokenLimit(RLMError):

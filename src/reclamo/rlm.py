@@ -21,9 +21,11 @@ the REPL; then a ``FINAL`` / ``FINAL_VAR`` candidate in the prose (rejected,
 with a corrective message, when it sits next to unexecuted code, names a
 missing variable, or reads like a plan the first time it is seen). When turns
 run out the loop prefers an answer that already exists in the REPL over asking
-a fresh guess from the model (paper failure E.2): the forced finish shows the
-model what the REPL holds (``answer['content']``, the usual answer variables,
-the last output) and asks for one ``FINAL`` / ``FINAL_VAR``. A valid reply wins;
+a fresh guess from the model (paper failure E.2); ``max_errors`` consecutive
+erroring turns end the same way (issue #50, stop reason ``error_limit``). The
+forced finish shows the model what the REPL holds (``answer['content']``, the
+usual answer variables, the last output) and asks for one ``FINAL`` /
+``FINAL_VAR``. A valid reply wins;
 otherwise the loop falls back to the answer dict, then an answer variable, then
 the reply's prose with code removed, then "". A code block is never the answer.
 
@@ -60,7 +62,7 @@ from typing import Any, Protocol
 
 from reclamo.client import Completion, ToolCall, Usage
 from reclamo.config import RLMConfig
-from reclamo.errors import RLMErrorLimit, RLMTimeout, RLMTokenLimit
+from reclamo.errors import RLMTimeout, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger, VerbosePrinter
 from reclamo.parsing import (
     FinalCandidate,
@@ -106,6 +108,8 @@ REPLFactory = Callable[[RLMConfig, LLMHandler], REPL]
 # Variables the forced finish shows the model, and falls back to in this order when
 # the model's forced reply is not a usable final.
 ANSWER_VAR_NAMES = ("final_answer", "answer_text", "result", "final")
+# Forced-finish ``why`` -> the run's stop_reason.
+FORCED_STOP_REASONS = {"turns": "max_iterations", "time": "timeout", "errors": "error_limit"}
 # The root-timeout forced finish is one call, thinking off, capped at this many seconds.
 FORCED_FINISH_TIMEOUT = 60.0
 CHARS_PER_TOKEN = 3.5
@@ -130,7 +134,7 @@ class RLMResult:
     subcalls: int
     usage: Usage
     elapsed: float
-    stop_reason: str  # final | final_var | answer_dict | max_iterations
+    stop_reason: str  # final | final_var | answer_dict | max_iterations | timeout | error_limit
     trajectory_path: str | None
     depth: int = 0
     child_turns: int = 0  # root turns taken by nested RLMs (depth >= 1), whole run
@@ -376,13 +380,14 @@ class RLM:
 
             if blocks:
                 consecutive_errors = consecutive_errors + 1 if any(r.error for r in results) else 0
-                if consecutive_errors >= cfg.max_errors:
-                    self._log_iteration(i, messages_in, completion, blocks, results, notes, None)
-                    raise RLMErrorLimit(
-                        f"{consecutive_errors} consecutive REPL errors "
-                        f"(max_errors={cfg.max_errors})",
-                        partial_answer=self._partial(repl, answer_state),
-                    )
+            if consecutive_errors >= cfg.max_errors:
+                # Issue #50: the error limit ends the loop through the forced finish, not
+                # an exception, so the REPL's work is not lost. The outputs go into the
+                # history first so the forced call sees the errors.
+                self._error_limit_outputs(history, kinds, blocks, results)
+                self._log_iteration(i, messages_in, completion, blocks, results, notes, None)
+                self._log_error_limit(i, consecutive_errors)
+                return self._forced_finish(history, repl, answer_state, i, started, why="errors")
 
             cand = find_final(content)
             if upstream and cand is not None and cand.kind == "FINAL_VAR" and cand.has_code:
@@ -580,13 +585,18 @@ class RLM:
 
             if codes:
                 consecutive_errors = consecutive_errors + 1 if any(r.error for r in results) else 0
-                if consecutive_errors >= cfg.max_errors:
-                    log(None)
-                    raise RLMErrorLimit(
-                        f"{consecutive_errors} consecutive REPL errors "
-                        f"(max_errors={cfg.max_errors})",
-                        partial_answer=self._partial(repl, answer_state),
-                    )
+            if consecutive_errors >= cfg.max_errors:
+                # Issue #50: forced finish instead of RLMErrorLimit. Every tool call gets
+                # its answer first so the history stays valid for the chat template.
+                for k, call in enumerate(calls):
+                    text = outputs.get(k, "Not run: the run stopped at the error limit.")
+                    msg = {"role": "tool", "tool_call_id": call.id, "content": text}
+                    self._append(history, kinds, msg, "repl")
+                if fenced_results:
+                    self._error_limit_outputs(history, kinds, fenced, fenced_results)
+                log(None)
+                self._log_error_limit(i, consecutive_errors)
+                return self._forced_finish(history, repl, answer_state, i, started, why="errors")
 
             decision: dict[str, Any] | None = None
             for k, args in finals.items():
@@ -683,6 +693,40 @@ class RLM:
         return self._forced_finish(history, repl, answer_state, iterations, started)
 
     # --- pieces -----------------------------------------------------------
+
+    def _error_limit_outputs(
+        self,
+        history: list[dict[str, Any]],
+        kinds: list[str],
+        blocks: list[str],
+        results: list[ExecResult],
+    ) -> None:
+        """Append the erroring turn's block outputs before the error-limit forced finish."""
+        if self.cfg.planner_style == "upstream-rlm-v0" and self.cfg.protocol == "fence":
+            for block, res in zip(blocks, results, strict=True):
+                msg = upstream_code_output(block, res, self.cfg.output_truncate_chars)
+                self._append(history, kinds, {"role": "user", "content": msg}, "repl")
+            return
+        parts = [
+            f"{f'[block {k} output]' if len(results) > 1 else '[output]'}\n"
+            f"{res.output or '(no output)'}"
+            for k, res in enumerate(results, 1)
+        ]
+        if parts:
+            self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, "repl")
+
+    def _log_error_limit(self, turn: int, consecutive: int) -> None:
+        self.logger.event(
+            "error_limit",
+            depth=self.depth,
+            turn=turn,
+            consecutive_errors=consecutive,
+            max_errors=self.cfg.max_errors,
+        )
+        self.printer.note(
+            f"{consecutive} consecutive REPL errors (max_errors={self.cfg.max_errors}); "
+            "forcing a final answer"
+        )
 
     def _exec(self, repl: REPL, code: str) -> ExecResult:
         res = repl.execute(code)
@@ -858,7 +902,7 @@ class RLM:
         started: float,
         why: str = "turns",
     ) -> RLMResult:
-        """Out of turns (or time): one more model call that sees what the REPL holds.
+        """Out of turns, time or errors: one more model call that sees the REPL state.
 
         The model is shown ``answer['content']`` and every usual answer variable that
         exists, so a stale variable cannot silently beat an answer the model just
@@ -867,7 +911,7 @@ class RLM:
         final, fall back: answer dict, then an answer variable, then the reply's
         prose with code and thinking removed, then "".
         """
-        stop = "max_iterations" if why == "turns" else "timeout"
+        stop = FORCED_STOP_REASONS[why]
         dict_content = (answer_state or {}).get("content")
         dict_value = str(dict_content) if dict_content else None
         found_vars: list[tuple[str, str]] = []
