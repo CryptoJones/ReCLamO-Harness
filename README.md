@@ -513,6 +513,184 @@ reconciliation. The clear levers are the turn budget and getting Qwen to delegat
 reading to `llm_query`, plus the two forced-finish bugs (since fixed). Any change to those must be
 measured on a fresh seed or new tasks, not on these rows.
 
+#### Re-run after fixes (458e2f7)
+
+**Frozen harness: commit `458e2f76c29ce668f898cc39d15b0ae6a8eb087c`.** We re-ran the same
+grid once the defects found above were fixed. Two things changed since the first run:
+
+- **The harness:** both forced-finish bugs were fixed (PR
+  [#34](https://github.com/CryptoJones/ReCLamO-Harness/pull/34)). The forced finish now
+  always asks the model once, shows it the REPL state, and never returns code. Batch
+  metadata records `src/reclamo/{client,parsing,prompts,rlm}.py` as changed from
+  `e17580f`. Nothing else changed.
+- **The tasks:** four defects were fixed (PR
+  [#35](https://github.com/CryptoJones/ReCLamO-Harness/pull/35)): the Multivac key, the
+  missing starting offices in TheDixieFlatline, SELMA's unassignment email and
+  MasterControl's scorer. GLaDOS, SHODAN, Cerebex and Neuromancer are unchanged, and for
+  them every seed × size produced the same context and key as in the first run.
+
+Everything else was the same as the first run: the default `pluto` profile, the fence
+protocol, depth 1, 20 turns, `max_timeout=900` s and `run_eval.py` unchanged. Nothing was
+tuned. The grid was also the same: 8 tasks × small/medium/large at seed 0, plus seed 1 for
+small and medium, for 80 rows. Batches ran one task × size at a time under the pluto lock,
+all small, then medium, then large. The run took 3 h 38 min on 2026-10-07/08. Raw rows are
+in `runs/independent-rerun-20261007.json`, with one trajectory per rlm row in `runs/`
+(not in git).
+
+Each cell shows seed 0 / seed 1. The first run's **†** cells were tasks whose key could not
+be reached. The fixes removed them for Multivac and TheDixieFlatline. **‡** marks SELMA
+cells that are still ambiguous because of a remaining SELMA defect (see "Defects in the
+round-2 tasks" below). The scores are what each generator's `score()` returned.
+
+| Task (author model) | Size | rlm score | plain | rlm turns | rlm sub-calls | rlm s | rlm stop |
+|---|---|---|---|---|---|---|---|
+| GLaDOS (grok-4.6) | small | 1 / 0.80 | 1 / 1 | 20 / 20 | 0 / 0 | 541 / 330 | answer_dict / answer_dict |
+|  | medium | 0.60 / 0.60 | does not fit (~148K tokens) | 20 / 20 | 0 / 0 | 215 / 316 | out of turns / out of turns |
+|  | large | 1 | does not fit (~606K tokens) | 20 | 0 | 273 | out of turns |
+| SHODAN (gpt-6-astra) | small | 0 / 0 (error) | 1 / 0 | 20 / – | 1 / – | 183 / 251 | out of turns / error |
+|  | medium | 0 / 0 | does not fit (~89K tokens) | 20 / 20 | 0 / 22 | 216 / 995 | out of turns / out of turns |
+|  | large | 0 | does not fit (~354K tokens) | 20 | 0 | 207 | out of turns |
+| TheDixieFlatline (gemini-3.1-pro-high) | small | 0 / 0 | 1 / 1 | 11 / 14 | 0 / 0 | 167 / 267 | answer_dict / answer_dict |
+|  | medium | 0 / 1 | does not fit (~99K tokens) | 11 / 18 | 0 / 0 | 155 / 257 | answer_dict / answer_dict |
+|  | large | 0 | does not fit (~400K tokens) | 13 | 0 | 216 | answer_dict |
+| Cerebex (glm-5.3-flash) | small | 0 / 0 | 0.50 / 1 | 20 / 20 | 0 / 1 | 306 / 465 | final / out of turns |
+|  | medium | 0 / 1 | does not fit (~93K tokens) | 19 / 20 | 0 / 0 | 510 / 386 | answer_dict / final |
+|  | large | 0 | does not fit (~373K tokens) | 20 | 4 | 345 | answer_dict |
+| Neuromancer (deepseek-v4-flash) | small | 1 / 0 | 1 / 1 | 7 / 11 | 0 / 1 | 68 / 438 | final / answer_dict |
+|  | medium | 0 / 1 | does not fit (~87K tokens) | 20 / 14 | 1 / 1 | 604 / 317 | answer_dict / answer_dict |
+|  | large | 1 | does not fit (~351K tokens) | 20 | 0 | 366 | out of turns |
+| SELMA (nemotron-3-super-120b-a12b) | small | 1 / 0‡ | 0 / 1‡ | 6 / 5 | 0 / 0 | 45 / 39 | answer_dict / final |
+|  | medium | 1 / 0‡ | does not fit (~90K tokens) | 10 / 9 | 0 / 0 | 87 / 65 | final / answer_dict |
+|  | large | 0‡ | does not fit (~358K tokens) | 7 | 0 | 57 | final |
+| MasterControl (mistral-medium-3.1) | small | 1 / 1 | 1 / 1 | 8 / 10 | 0 / 0 | 78 / 94 | answer_dict / answer_dict |
+|  | medium | 1 / 1 | does not fit (~87K tokens) | 11 / 10 | 0 / 0 | 176 / 186 | answer_dict / answer_dict |
+|  | large | 1 | does not fit (~344K tokens) | 9 | 0 | 166 | answer_dict |
+| Multivac (hermes-4-405b) | small | 1 / 0.50 | 1 / 0.50 | 5 / 6 | 0 / 0 | 38 / 32 | final / final |
+|  | medium | 1 / 1 | does not fit (~106K tokens) | 7 / 7 | 0 / 0 | 61 / 52 | answer_dict / answer_dict |
+|  | large | 1 | does not fit (~429K tokens) | 8 | 0 | 68 | answer_dict |
+
+Accuracy by size in the re-run. A plain prompt that does not fit scores 0. The error row
+scores 0.
+
+| Size | Cells | rlm mean | rlm exact | plain mean | plain exact | plain does not fit | Cells without ‡ | rlm mean | rlm exact | plain mean | plain exact |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| small (~60K) | 16 | 0.46 | 6/16 | 0.81 | 12/16 | 0/16 | 15 | 0.49 | 6/15 | 0.80 | 11/15 |
+| medium (~300K) | 16 | 0.57 | 8/16 | 0.00 | 0/16 | 16/16 | 15 | 0.61 | 8/15 | 0.00 | 0/15 |
+| large (~1.2M) | 8 | 0.50 | 4/8 | 0.00 | 0/8 | 8/8 | 7 | 0.57 | 4/7 | 0.00 | 0/7 |
+
+Comparison with the first run, same cells (mean / exact):
+
+| Size | rlm, first run | rlm, re-run | plain, first run | plain, re-run |
+|---|---|---|---|---|
+| small (~60K) | 0.38 / 5 of 16 | 0.46 / 6 of 16 | 0.59 / 9 of 16 | 0.81 / 12 of 16 |
+| medium (~300K) | 0.36 / 5 of 16 | 0.57 / 8 of 16 | 0.00 (does not fit) | 0.00 (does not fit) |
+| large (~1.2M) | 0.15 / 1 of 8 | 0.50 / 4 of 8 | 0.00 (does not fit) | 0.00 (does not fit) |
+
+Split by whether the task changed (rlm over all three sizes; plain at small, the only size
+where it fits):
+
+| Tasks | rlm, first run | rlm, re-run | plain small, first run | plain small, re-run |
+|---|---|---|---|---|
+| Unchanged (GLaDOS, SHODAN, Cerebex, Neuromancer) | 0.33 / 5 of 20 | 0.40 / 6 of 20 | 0.81 / 6 of 8 | 0.81 / 6 of 8 |
+| Fixed (TheDixieFlatline, SELMA, MasterControl, Multivac) | 0.33 / 6 of 20 | 0.62 / 12 of 20 | 0.38 / 3 of 8 | 0.81 / 6 of 8 |
+
+Findings:
+
+- **Most of the gain comes from the task fixes, not the harness.** The rlm improvement is
+  concentrated in the four fixed tasks, where exact answers went from 6 of 20 to 12 of 20.
+  Multivac went from 0 to exact on 4 of 5 cells, and its fifth cell is right but
+  under-scored (see below). MasterControl is now exact everywhere. On the four unchanged
+  tasks, rlm went from 5 to 6 exact out of 20, and plain scored exactly as before on all
+  8 small cells. That rlm change is two exact cells gained (GLaDOS large and Neuromancer
+  large) and one lost (Neuromancer small seed 1). The contexts were identical, so this
+  is consistent with run-to-run sampling noise.
+- **The forced-finish fixes did not rescue any answer.** There were 9 forced finishes
+  (`forced_finish` events), all from running out of turns, against 15 in the first run.
+  Of these, 8 had `source=model`: the forced reply contained a valid `FINAL(...)`. The
+  other was `source=reply_text`. None used `answer_dict` or `variable`, and `shown` was
+  empty in all 9, so no answer dict or answer variable existed to show. Two of the 9 were
+  exact, the same count as the first run's 15:
+  - **GLaDOS large** (`runs/20261008T071548Z-de1caa.jsonl`): the reply was a model
+    `FINAL`.
+  - **Neuromancer large** (`runs/20261008T073313Z-48c9be.jsonl`): the reply was
+    `FINAL ≈ **$91,049.09**`, which does not parse as `FINAL(...)`. The new fallback kept
+    its prose, the same total the first run lost to a stale `result` variable.
+
+  This time, however, that trajectory made no `llm_query` call and set no `result`, and
+  the reply contained no code. The old code would have returned the same text. Bug 1 (a
+  stale variable) never had a variable to act on, and bug 2 (code returned as the answer)
+  never had code to strip. The fixes are therefore untested by this run rather than shown
+  to help. No answer contained a code block.
+- **Below the window, plain still wins clearly.** At ~60K characters, plain was exact on
+  12 of 16 cells and rlm on 6. Plain took a median 69 s for the chosen call (167 s for
+  both variants), against 175 s for rlm. TheDixieFlatline is now answerable, and it shows
+  the gap: plain was exact on both seeds, and rlm was wrong on both. On small seed 0,
+  rlm traced the renames correctly. It then took an Auditor's "going to be moved to Room
+  112 tomorrow" as the final location (`runs/20261008T044627Z-6d2fa3.jsonl`).
+- **Above the window, the harness is still the only option, and it is better than in
+  the first run.** It was exact on 8 of 16 medium and 4 of 8 large cells, against 5 of 16
+  and 1 of 8 in the first run. It is reliable on MasterControl and Multivac (exact on
+  every medium and large cell) and still never solves SHODAN (0 of 5). GLaDOS medium
+  keeps getting 0.60: a wrong amount, or a right amount with no certifying member. Cerebex
+  large was wrong despite 4 sub-calls.
+- **The turn cap is still the main harness-side limit.** 15 of 40 rlm rows used all 20
+  turns, and 9 of them ended in a forced finish (2 exact). SHODAN medium seed 1 made
+  22 `llm_query` calls, then gave up with all-zero credits. Its forced reply says "the
+  aggregation step never ran" (`runs/20261008T061131Z-c01315.jsonl`).
+- **Qwen still rarely delegates.** 7 of 40 rlm rows made any sub-call, against 5 in the
+  first run, and one row accounts for 22 of the 31 calls.
+- **Protocol is still clean, with one aborted row.** 536 code executions produced
+  1 syntax error and 8 execution errors, with 0 rejected finals and 7 protocol slips. One
+  row, SHODAN small seed 1, is an **error** row (`runs/20261008T043757Z-64a70a.jsonl`):
+  turns 13–15 raised a `SyntaxError` and then two `IndexError`s, and `max_errors=3`
+  raised `RLMErrorLimit`. That exception ends the run with no forced finish, so 15 turns
+  of REPL state produced no answer. This is a new harness finding. It is recorded here
+  and not fixed.
+- **`max_timeout` can overrun by a turn plus the forced finish.** SHODAN medium seed 1
+  took 995 s against the 900 s cap. The deadline is checked when each turn starts. Turn
+  20 started at 852 s and ended at 929 s, and the forced finish after running out of
+  turns is not time-bounded (only the timeout path is). No run looped or stalled, and
+  none had to be killed.
+
+Defects in the round-2 tasks. The scores above stand as the round-2 generators compute
+them. The round-3 audit found both of these independently, and they were fixed on `main`
+in PR [#46](https://github.com/CryptoJones/ReCLamO-Harness/pull/46), which merged during
+this run's large phase. This run used the round-2 versions pinned at `458e2f7` throughout:
+`run_eval.py` checks each generator's sha256 against that manifest.
+
+- **SELMA's round-2 fix is incomplete (‡).** The key follows the emails' order in the
+  document, but each email's displayed `Date:` is a random day within the event's year
+  (`_rand_date(rng, year, year)`). The latest-dated email can therefore contradict the
+  key. In all three "Unassigned" cells that were run, the latest-dated AI Ethics email
+  assigns a lead. These are small seed 1, medium seed 1 and large seed 0, the same three
+  cells as the first run's †. In large seed 0, for example, "Position Now Unassigned" is
+  dated 2032-01-20 and an assignment to Taylor Jackson is dated 2032-04-13. rlm sorted
+  by date and answered Taylor Jackson (`runs/20261008T073921Z-ab1184.jsonl`). Over seeds
+  0–9, 12 of 30 seed × size cells have this conflict. The round-2 self-test passed
+  because it finds the last email by position, not by date.
+- **Three scorers reject correct answers written in markdown or as phrases.** This is the
+  same kind of defect that MasterControl had:
+  - SELMA splits the answer on whitespace, so `**Skyler Martin**` keeps its asterisks and
+    scores 0. On SELMA small seed 0, plain's thinking variant gave that correct answer
+    in bold. Its no-thinking variant said "Unassigned", so the cell scored 0.
+  - Multivac's status regex rejects both "status is **Blocked**" and
+    "**Status:** Blocked". On Multivac small seed 1, both modes gave the correct status
+    and full description and scored 0.50.
+  - GLaDOS's outcome check rejects "DID pass". On GLaDOS small seed 1, rlm had the right
+    amount and name and scored 0.80.
+
+**Verdict.** After the fixes, the picture is the same in kind and better in degree.
+Below the window, the plain model is still clearly better: 12 exact against 6. Above it,
+the harness answers about half the cells exactly, where plain answers none: 8 of 16
+medium and 4 of 8 large, up from 5 and 1. The improvement comes from repairing the
+tasks; on unchanged tasks it is within noise. The forced-finish fixes were not
+exercised. The open levers are the same as before: the 20-turn budget, delegation to
+`llm_query`, and multi-document reconciliation (SHODAN). Two new harness questions came
+up: whether `max_errors` should end in a forced finish rather than an exception, and
+whether the forced finish should be time-bounded. Both need measuring on new seeds, not
+on these rows. These numbers are also for the round-2 task set. The round-3 set in PR #46
+changes the keys and scorers of all eight tasks, so it needs its own run.
+
 ### Smoke run (self-authored tasks)
 
 These tasks, like the benchmark, protocol and depth-2 tasks below, were written by the
