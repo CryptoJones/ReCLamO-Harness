@@ -199,23 +199,13 @@ class ProjectSpecGenerator:
         sections.append("End of Document")
         return "\n".join(sections)
 
-    def pick_target_requirement(self):
-        """Pick the requirement to ask about + answer for, ONCE per generate().
+    def get_question(self, target_req_id):
+        return f"What is the current status and full description of requirement {target_req_id}?"
 
-        Originally get_question() and get_answer() each called self.rng.choice
-        independently, so the asked-about requirement was almost always different
-        from the requirement whose state was returned in the answer key.
-        """
-        req_ids = list(self.current_state.keys())
-        return self.rng.choice(req_ids)
-
-    def get_question(self, target_req):
-        return f"What is the current status and full description of requirement {target_req}?"
-
-    def get_answer(self, target_req):
-        req = self.current_state[target_req]
+    def get_answer(self, target_req_id):
+        req = self.current_state[target_req_id]
         return {
-            "req_id": target_req,
+            "req_id": target_req_id,
             "status": req["status"],
             "description": req["description"]
         }
@@ -231,13 +221,14 @@ def generate(seed: int, size: str) -> dict:
     if size not in {"small", "medium", "large"}:
         raise ValueError("size must be 'small', 'medium', or 'large'")
     gen = ProjectSpecGenerator(seed, size)
-    # Pick the target requirement ONCE so the question and the answer key describe
-    # the same requirement (the original defect had them calling rng.choice separately).
-    target_req = gen.pick_target_requirement()
+    
+    req_ids = list(gen.current_state.keys())
+    target_req_id = gen.rng.choice(req_ids)
+    
     return {
         "context": gen._generate_context(),
-        "question": gen.get_question(target_req),
-        "answer": gen.get_answer(target_req),
+        "question": gen.get_question(target_req_id),
+        "answer": gen.get_answer(target_req_id),
         "meta": gen.get_meta()
     }
 
@@ -255,10 +246,8 @@ def score(answer_text: str, truth: dict) -> float:
     status_found = False
     desc_found = False
 
-    # Accept both "Status: pending" (formatted) and "'status': 'pending'" (str(dict)).
     status_pattern = re.compile(
-        rf"(?:status[:\s']+|['\"]\s*status\s*['\"]?\s*[:=]\s*['\"])\s*({re.escape(expected_status)})",
-        re.IGNORECASE,
+        rf"(?:status[:\s']+|['\"]\s*status\s*['\"]?\s*[:=]\s*['\"])\s*({re.escape(expected_status)})", re.IGNORECASE
     )
     if status_pattern.search(answer_text):
         status_found = True
@@ -274,7 +263,6 @@ def score(answer_text: str, truth: dict) -> float:
     return 0.0
 
 if __name__ == "__main__":
-    import re as _re
     for size in ["small", "medium", "large"]:
         data = generate(0, size)
         print(f"Size: {size}")
@@ -283,37 +271,23 @@ if __name__ == "__main__":
         print(f"Truth: {data['answer']}")
         print(f"Meta: {data['meta']}")
         print()
-
+        
         truth_str = f"Requirement {data['answer']['req_id']}: Status: {data['answer']['status']}, Description: {data['answer']['description']}"
         assert score(truth_str, data["answer"]) == 1.0
-
+        
         wrong_status = "Completed" if data["answer"]["status"] != "Completed" else "Pending"
         wrong_answer1 = f"Requirement {data['answer']['req_id']}: Status: {wrong_status}, Description: {data['answer']['description']}"
         assert score(wrong_answer1, data["answer"]) < 1.0
-
+        
         wrong_desc = "This is an incorrect description"
         wrong_answer2 = f"Requirement {data['answer']['req_id']}: Status: {data['answer']['status']}, Description: {wrong_desc}"
         assert score(wrong_answer2, data["answer"]) < 1.0
-
+        
         print("All tests passed for", size)
         print("-" * 50)
-
-    # ----- Defect-specific regression assertion -----
-    # Originally, get_question() and get_answer() each called rng.choice independently, so
-    # the requirement named in the question almost never matched the requirement described
-    # in the answer key (mismatch in 18/18 seed x size combinations checked). The fix picks
-    # the target requirement once per generate() and uses it for both. This assertion
-    # proves, for every required (seed, size) cell, the asked requirement equals the
-    # described one.
-    for seed in range(10):
-        for size in ["small", "medium", "large"]:
-            d = generate(seed, size)
-            m = _re.search(r"requirement (R\d+)", d["question"])
-            assert m is not None, f"Question has no requirement id (seed={seed}, size={size})"
-            asked = m.group(1)
-            answered = d["answer"]["req_id"]
-            assert asked == answered, (
-                f"Multivac defect: asked-about {asked} != answered {answered} "
-                f"(seed={seed}, size={size})"
-            )
-    print("Multivac: defect-specific assertions PASS (asked == answered for every seed/size).")
+        
+        for seed_val in range(0, 10):
+            data_check = generate(seed_val, size)
+            q_target = data_check["question"].split()[-1]
+            a_target = data_check["answer"]["req_id"]
+            assert q_target == a_target, f"Mismatch at seed {seed_val}, size {size}: Q={q_target}, A={a_target}"

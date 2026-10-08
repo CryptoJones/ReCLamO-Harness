@@ -64,11 +64,32 @@
       },
       "self_test_exit": 0,
       "original_status": "pass",
-      "fix_attempts": [],
+      "fix_attempts": [
+        {
+          "round": 2,
+          "defect": "starting offices never stated, so the answer was sometimes underivable",
+          "found_by": "independent evaluation #22 (PR #33)",
+          "by": "TheDixieFlatline (gemini-3.1-pro-high) - original author",
+          "file": "fixed/round2/self/TheDixieFlatline.py",
+          "sha256": "db89a777741f6526f70a206f88dfdb0949fbef0e9244215bb4236c23ce290bfa",
+          "request": "fixed/round2/self/requests/TheDixieFlatline.md",
+          "response": "fixed/round2/self/answers/TheDixieFlatline.md",
+          "result": "pass"
+        },
+        {
+          "round": 2,
+          "defect": "starting offices never stated, so the answer was sometimes underivable",
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round2/minimax/TheDixieFlatline.py",
+          "sha256": "c23d490f275836c542d8dc4ca7b319022ba140e625c6f30c6a7e49e9dbbf41e0",
+          "notes": "fixed/round2/minimax/FIXES.md",
+          "result": "pass"
+        }
+      ],
       "active": {
         "file": "fixed/active/TheDixieFlatline.py",
-        "sha256": "8b933ab47285cc65522b8741b3b3494234a72010ace7f973684ea100f13a5fbd",
-        "source": "original"
+        "sha256": "db89a777741f6526f70a206f88dfdb0949fbef0e9244215bb4236c23ce290bfa",
+        "source": "round-2 self-fix"
       }
     },
     "Cerebex": {
@@ -182,12 +203,32 @@
           "sha256": "f60dbac71a27fd436da404013526c051254ee5368a23470df4d46cf712769350",
           "notes": "fixed/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 2,
+          "defect": "unassign event produced no email, so 'Unassigned' keys contradicted the thread",
+          "found_by": "independent evaluation #22 (PR #33)",
+          "by": "SELMA (nemotron-3-super-120b-a12b:free) - original author",
+          "file": "fixed/round2/self/SELMA.py",
+          "sha256": "2670472ac83fc3b42fb8fece9a3469c4a3d0a93fd3d64398a2182aa81f3ffd8f",
+          "request": "fixed/round2/self/requests/SELMA.md",
+          "response": "fixed/round2/self/answers/SELMA.md",
+          "result": "incomplete: 2 of 30 seed x size cells still 'Unassigned' with no email"
+        },
+        {
+          "round": 2,
+          "defect": "unassign event produced no email, so 'Unassigned' keys contradicted the thread",
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round2/minimax/SELMA.py",
+          "sha256": "6183e70ebd53b1070efb7b4a07f1d9a9cbeeb347a45e9c888f302de29845fed2",
+          "notes": "fixed/round2/minimax/FIXES.md",
+          "result": "pass"
         }
       ],
       "active": {
         "file": "fixed/active/SELMA.py",
-        "sha256": "d9b26359076aa175e30f10f6c8bd86ff08fef6afa515fec9d7fe0e91fa66f9ad",
-        "source": "self-fix"
+        "sha256": "6183e70ebd53b1070efb7b4a07f1d9a9cbeeb347a45e9c888f302de29845fed2",
+        "source": "round-2 minimax fix"
       }
     },
     "MasterControl": {
@@ -219,12 +260,32 @@
           "sha256": "3a36051d3aa5e8e90acabbd15ce6769a6569f520cb6ed478ffbcc41a5e82cf34",
           "notes": "fixed/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 2,
+          "defect": "scorer: IGNORECASE name regex swallowed sentences; amount regex split unformatted numbers (39195 -> 391/95)",
+          "found_by": "independent evaluation #22 (PR #33)",
+          "by": "MasterControl (mistral-medium-3.1) - original author",
+          "file": "fixed/round2/self/MasterControl.py",
+          "sha256": "d77c20ce2c6f20e9ffc98b331da4ff010b4fdb78fa4f709ba38abe0081704261",
+          "request": "fixed/round2/self/requests/MasterControl.md",
+          "response": "fixed/round2/self/answers/MasterControl.md",
+          "result": "fail: own new self-test"
+        },
+        {
+          "round": 2,
+          "defect": "scorer: IGNORECASE name regex swallowed sentences; amount regex split unformatted numbers (39195 -> 391/95)",
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round2/minimax/MasterControl.py",
+          "sha256": "53e712e9019f2c646f51f6060712fec97e7650cae4fd3a21af64cf61057ebcd5",
+          "notes": "fixed/round2/minimax/FIXES.md",
+          "result": "pass"
         }
       ],
       "active": {
         "file": "fixed/active/MasterControl.py",
-        "sha256": "9fa3027d5ac6447c4c7fb887e339df3e0f6cb3db9f5fa6efd92de91029499c70",
-        "source": "self-fix"
+        "sha256": "53e712e9019f2c646f51f6060712fec97e7650cae4fd3a21af64cf61057ebcd5",
+        "source": "round-2 minimax fix"
       }
     },
     "Multivac": {
@@ -256,14 +317,35 @@
           "sha256": "055da66d1dc41f0d378a326139b18fa05f28fa90f3a6b728ef9275c9abd79284",
           "notes": "fixed/minimax/FIXES.md",
           "result": "pass"
+        },
+        {
+          "round": 2,
+          "defect": "answer key described a different requirement than the question (rng.choice called separately in get_question/get_answer)",
+          "found_by": "independent evaluation #22 (PR #33)",
+          "by": "Multivac (hermes-4-405b) - original author",
+          "file": "fixed/round2/self/Multivac.py",
+          "sha256": "cd54e51cb939141bf13867acb419283636ca5d6e5c77914beb77927fb5066725",
+          "request": "fixed/round2/self/requests/Multivac.md",
+          "response": "fixed/round2/self/answers/Multivac.md",
+          "result": "fail: own new self-test mismatch"
+        },
+        {
+          "round": 2,
+          "defect": "answer key described a different requirement than the question (rng.choice called separately in get_question/get_answer)",
+          "by": "MiniMax-M3 via Claude Code (minimax-claude --bare), sandboxed",
+          "file": "fixed/round2/minimax/Multivac.py",
+          "sha256": "db4ddee6c0d506905ed5fa33ea34652258524a6a06055109ce61440d1d292d2b",
+          "notes": "fixed/round2/minimax/FIXES.md",
+          "result": "pass"
         }
       ],
       "active": {
         "file": "fixed/active/Multivac.py",
-        "sha256": "055da66d1dc41f0d378a326139b18fa05f28fa90f3a6b728ef9275c9abd79284",
-        "source": "minimax-fix"
+        "sha256": "db4ddee6c0d506905ed5fa33ea34652258524a6a06055109ce61440d1d292d2b",
+        "source": "round-2 minimax fix"
       }
     }
   },
-  "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent."
+  "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent.",
+  "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run."
 }

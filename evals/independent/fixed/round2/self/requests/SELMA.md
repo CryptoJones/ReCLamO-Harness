@@ -1,3 +1,55 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 2)
+
+The generator below is the version of your task currently used for evaluation. A real evaluation run found this defect in it:
+
+**The 'Unassigned' answer key can contradict the text: a random unassign event changes the ground truth but produces NO email, so in 3 of 5 cells run (seed 0 large, seed 1 small and medium) the key says 'Unassigned' while the latest dated email in the thread names a lead. Every state change that affects the answer must be visible in the thread: emit an email for the unassign event (paraphrased, consistent with the thread's style), and add a self-test that for seeds 0-9 at every size the truth is consistent with the last ownership-relevant email.**
+
+Return a corrected version that still satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, standard library only, Python 3.11 compatible: no backslashes inside f-string expressions). Keep the same task idea, question style and difficulty; change only what the defect requires. Same deliverable format: one paragraph (mention what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 import string
@@ -211,46 +263,19 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
                     f"Thanks,\n{sender}"
                 )
         elif etype == "decline":
-            # Note: the truth computation treats "decline" as an ownership-changing event
-            # that sets current_owner = None. The original email text said "Please reassign
-            # this responsibility" but never said the position is now empty, so a careful
-            # reader tracking only the most recent email could easily leave the original
-            # lead in mind. Make it explicit so the email matches the truth.
-            subject = f"Update: AI Ethics Review Lead Declined -- Position Now Unassigned"
+            subject = f"Update: Unable to Lead AI Ethics Review"
             body = (
-                f"Hi team,\n\n"
-                f"I'm writing to confirm that the previous AI Ethics Review lead has declined "
-                f"the role due to bandwidth constraints. Effective immediately, the AI Ethics "
-                f"Review lead position is unassigned until a new lead can be confirmed. "
-                f"Please update your records and re-circulate the call for a new lead.\n"
+                f"Hi {recipient.split()[0] if 'Team' not in recipient else 'team'},\n\n"
+                f"Unfortunately, I need to decline leading the AI Ethics Review due to bandwidth constraints. "
+                f"Please reassign this responsibility.\n"
                 f"Thanks,\n{sender}"
             )
         elif etype == "cancel":
-            # Same as above: the truth is "Unassigned" after a cancel event; spell it out
-            # in the body so the thread stays consistent with the key.
-            subject = f"Update: AI Ethics Review Cancelled -- Position Now Unassigned"
+            subject = f"Update: AI Ethics Review Postponed"
             body = (
                 f"Hi team,\n\n"
-                f"The AI Ethics Review for Project {rng.choice(PROJECTS)} has been cancelled "
-                f"and the lead position is now unassigned. No further action is required from "
-                f"the previous reviewers and ownership will need to be re-confirmed before any "
-                f"follow-up work begins.\n"
-                f"Thanks,\n{sender}"
-            )
-        elif etype == "unassign":
-            # Originally this fell through to the generic "Note: AI Ethics Review Update"
-            # else-branch and produced an email that said "the AI Ethics Review is
-            # progressing well. The team is handling the current deliverables.", which was
-            # inconsistent with the truth key (which was now "Unassigned" because the
-            # timeline's unassign event clears current_owner = None). The latest AI Ethics
-            # email in the thread would then quietly disagree with the key. Add an explicit
-            # branch that surfaces the unassigned state in the same prose style.
-            subject = f"Update: AI Ethics Review Lead Unassigned"
-            body = (
-                f"Hi team,\n\n"
-                f"This is to confirm that the AI Ethics Review lead position is now "
-                f"unassigned. We are looking for a new lead to take over ownership and "
-                f"will circulate a call for nominations shortly.\n"
+                f"The AI Ethics Review for Project {rng.choice(PROJECTS)} has been postponed indefinitely. "
+                f"No further action is required at this time.\n"
                 f"Thanks,\n{sender}"
             )
         elif etype == "correct":
@@ -551,53 +576,4 @@ if __name__ == "__main__":
             print(f"Wrong answer '{wrong}' scored: {s:.2f}")
         print("-" * 50)
 
-    # ----- Defect-specific regression assertions -----
-    # Original bug: a random `unassign` side-effect could fire after the last email about
-    # AI Ethics, setting the truth key to "Unassigned" without producing any clear email
-    # that said so; the same problem existed for the decline/cancel paths. The solver
-    # looking at the latest AI Ethics email would still see a named lead in the
-    # signature/declination text. The fix (1) makes unassign a dedicated email branch
-    # that says "the lead position is now unassigned", and (2) makes decline/cancel
-    # emails explicitly state that the position is now unassigned. This assertion proves
-    # the TRUTH matches the LAST ownership-changing email for every (seed, size) cell.
-    # Concretely: if the truth is "Unassigned", the most recent AI Ethics email must
-    # mention "unassigned". If the truth is a name, that name must appear in the most
-    # recent AI Ethics email (as the person who is now in the role).
-    import re as _re_selma
-    _SUBJ_PAT = _re_selma.compile(r"Subject:\s*([^\n]+)")
-    _SUBJ_BACKSLASH = chr(92)
-    for seed in range(10):
-        for size in ["small", "medium", "large"]:
-            d = generate(seed, size)
-            ctx = d["context"]
-            truth = d["answer"]
-            # Find the most recent AI Ethics email by scanning from the end.
-            last_email = None
-            ix = len(ctx)
-            while True:
-                prev = ctx.rfind("From: ", 0, ix)
-                if prev == -1:
-                    break
-                chunk = ctx[prev:ix]
-                if "AI Ethics" in chunk:
-                    last_email = chunk
-                    break
-                ix = prev
-            assert last_email is not None, (
-                "No AI Ethics email found at all (seed=" + str(seed) + ", size=" + size + ")"
-            )
-            _m = _SUBJ_PAT.search(last_email)
-            subj_str = _m.group(1) if _m else "?"
-            if truth == "Unassigned":
-                assert "unassigned" in last_email.lower(), (
-                    "SELMA defect: truth is 'Unassigned' but latest AI Ethics email "
-                    "does not say 'unassigned' (seed=" + str(seed) + ", size=" + size + "). "
-                    "Email subject: " + repr(subj_str)
-                )
-            else:
-                assert truth in last_email, (
-                    "SELMA defect: truth is " + repr(truth) + " but latest AI Ethics email "
-                    "does not name them (seed=" + str(seed) + ", size=" + size + "). "
-                    "Email subject: " + repr(subj_str)
-                )
-    print("SELMA: defect-specific assertions PASS (truth consistent with last ownership email).")
+```

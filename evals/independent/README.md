@@ -124,4 +124,32 @@ keep unchanged:
 It also found that MasterControl's scorer rejects a name that is written inside a
 sentence.
 
+## Round 2: defects found by the evaluation
+
+The #22 run (PR #33) found defects that `check.py` could not catch, because it only checks
+that a key scores itself:
+
+- **Multivac:** the answer key described a different requirement than the question asked.
+- **TheDixieFlatline:** the answer was sometimes impossible to derive, because starting
+  offices were never stated.
+- **SELMA:** an unassignment produced no email.
+- **MasterControl:** the scorer rejected correct answers phrased as sentences, and it
+  rejected unformatted amounts.
+
+Each defect went back to its author lane first, and MiniMax-M3 repaired all four in
+parallel. Every fix was then checked with `fixed/round2/verify_defects.py` over seeds
+0–9 at every size, and with `check.py`.
+
+| Task | Author's own fix | Active version |
+|---|---|---|
+| TheDixieFlatline | **pass** | author (Gemini) |
+| SELMA | incomplete (2/30 cells still unexplained) | MiniMax |
+| Multivac | failed its own new self-test | MiniMax |
+| MasterControl | failed its own new self-test | MiniMax |
+
+For MasterControl, the generated data is byte-identical to the previous version; only the
+scorer changed. Everything is under `fixed/round2/`: requests, responses, both sets of
+fixes and `FIXES.md`. The #22 numbers were measured on the earlier versions and have not
+been re-run.
+
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*

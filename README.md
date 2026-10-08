@@ -356,21 +356,21 @@ numbers above are still the ones measured on frozen `e17580f`, and no row was re
 Defects in the tasks. The generators were left unchanged, so these rows are scored as
 the generators score them. The "answerable" columns above leave out the † cells.
 
-- **Multivac's key never matches its question.** `get_question()` and `get_answer()`
+- **Multivac's key never matches its question.** *(Fixed after this run: the target is now picked once; see `evals/independent/fixed/round2/`.)* `get_question()` and `get_answer()`
   each call `rng.choice` separately, so the key describes a different requirement from
   the one asked about. It mismatched in all 18 seed × size combinations checked. The
   bug is in the original, in the author's fix and in the MiniMax fix. `check.py` only
   tests `score(truth) == 1`, so it passed. In the rows we read, both modes answered about
   the requirement that was asked for.
-- **TheDixieFlatline's answer is sometimes absent from the context.** The starting
+- **TheDixieFlatline's answer is sometimes absent from the context.** *(Fixed after this run by its author: starting offices are now stated.)* The starting
   offices are never written into the context. If the final holder never moved or
   confirmed an office, the answer cannot be found. That happened in 3 of the 5 cells
   run: seed 0 small and medium, and seed 1 small.
-- **SELMA's "Unassigned" key can contradict the text.** A random `unassign` event
+- **SELMA's "Unassigned" key can contradict the text.** *(Fixed after this run: unassignment now emits an email.)* A random `unassign` event
   produces no email, so in 3 of the 5 cells run (seed 0 large, seed 1 small and medium)
   the key is "Unassigned" while the latest dated email names a lead. Both modes named
   that lead.
-- **MasterControl's scorer rejects a name written inside a sentence.** Its name regex
+- **MasterControl's scorer rejects a name written inside a sentence.** *(Fixed after this run, along with unformatted amounts like `39195`.)* Its name regex
   runs with `IGNORECASE`, so `"Priya Patel was the only employee flagged…"` matches as
   one long "name", and a correct answer gets 0.5. That is MasterControl small seed 0
   for rlm. The cell is counted as answerable and the 0.5 stands.
