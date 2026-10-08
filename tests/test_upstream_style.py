@@ -349,3 +349,19 @@ def test_child_rlm_inherits_style() -> None:
     child = lm.root_calls[1]["messages"]
     assert child[0]["content"] == UPSTREAM_SYSTEM_PROMPT
     assert child[2]["content"] == user_prompt("count lines", 0)
+
+
+def test_error_limit_forced_finish_in_upstream_style() -> None:
+    """Issue #50 in the upstream layout: outputs stored per block, then the forced finish."""
+    root = [
+        "```repl\nparts = ['42']\n```",
+        "```repl\n1 / 0\n```\n```repl\nprint('ok')\n```",
+        "```repl\nundefined_name\n```",
+        "FINAL_VAR(parts)",
+    ]
+    result, lm = _run(root, cfg=_cfg(max_errors=2))
+    assert (result.answer, result.stop_reason) == ("['42']", "error_limit")
+    msgs = lm.root_calls[-1]["messages"]
+    assert msgs[-1]["content"].startswith("Code executed:") and "NameError" in msgs[-1]["content"]
+    assert f'The original prompt: "{QUERY}".' in msgs[-1]["content"]
+    assert "failed too many times in a row" in msgs[-1]["content"]

@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from reclamo.config import ModelConfig, RLMConfig
-from reclamo.errors import RLMErrorLimit, RLMTokenLimit
+from reclamo.errors import RLMTokenLimit
 from reclamo.logger import TrajectoryLogger
 from reclamo.prompts import forced_final_prompt
 from reclamo.rlm import FORCED_FINISH_TIMEOUT, RLM, describe_context
@@ -400,12 +400,38 @@ def test_timeout_inside_a_child_reaches_the_parent_as_an_error_then_forced_finis
     assert output.endswith(forced_final_prompt("time"))
 
 
-def test_error_limit() -> None:
+def test_error_limit_forces_a_finish_instead_of_raising(tmp_path: Path) -> None:
+    """Issue #50: hitting max_errors goes through the forced finish, no exception."""
     cfg = _cfg(max_errors=2)
-    lm = MockLM(["```repl\nx = 1 / 0\n```", "```repl\nundefined_name\n```", "FINAL(never)"])
-    with pytest.raises(RLMErrorLimit, match="2 consecutive REPL errors"):
-        RLM(cfg, lm).completion(CONTEXT, "?")
-    assert len(lm.root_calls) == 2
+    logger = TrajectoryLogger(tmp_path)
+    lm = MockLM(["```repl\nx = 1 / 0\n```", "```repl\nundefined_name\n```", "FINAL(forced)"])
+    result = RLM(cfg, lm, logger=logger).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason, result.iterations) == ("forced", "error_limit", 2)
+    assert len(lm.root_calls) == 3
+    forced = lm.root_calls[2]["messages"][-1]["content"]
+    assert "NameError" in forced  # the erroring turn's output reaches the forced call
+    assert forced.endswith(forced_final_prompt("errors"))
+    events = [json.loads(line) for line in Path(logger.path).read_text().splitlines()]
+    (limit,) = [e for e in events if e["type"] == "error_limit"]
+    assert (limit["turn"], limit["consecutive_errors"], limit["max_errors"]) == (2, 2, 2)
+    (ff,) = [e for e in events if e["type"] == "forced_finish"]
+    assert ff["why"] == "errors" and events[-1]["stop_reason"] == "error_limit"
+
+
+def test_error_limit_keeps_a_useful_variable_built_before_the_errors() -> None:
+    """Issue #50 acceptance: three erroring turns after a useful variable yield that value."""
+    cfg = _cfg(max_errors=3, max_iterations=10)
+    root = [
+        "```repl\nfinal_answer = 'Legal: 7'\n```",
+        "```repl\nx = 1 / 0\n```",
+        "```repl\n[][1]\n```",
+        "```repl\ndef broken(:\n```",
+        "```repl\nprint('code is never run in the forced reply')\n```",
+    ]
+    result, lm = _run(root, cfg=cfg)
+    assert (result.answer, result.stop_reason, result.iterations) == ("Legal: 7", "error_limit", 4)
+    assert len(lm.root_calls) == 5
+    assert "- final_answer = Legal: 7" in lm.root_calls[4]["messages"][-1]["content"]
 
 
 def test_token_limit() -> None:

@@ -67,8 +67,9 @@ Exit codes: `0` an answer was produced (including a forced finish when turns or 
 run out: one last call that shows the model what the REPL holds and asks for `FINAL` /
 `FINAL_VAR`, falling back to the answer dict, then an answer variable, then the reply's
 prose with code removed), `3` a
-limit stopped the run (consecutive REPL errors, token budget; any partial answer is
-printed), `2` configuration or key errors, `1` the endpoint failed.
+limit stopped the run (token budget: any partial answer is printed; or `max_errors`
+consecutive REPL errors, which since [#50](https://github.com/CryptoJones/ReCLamO-Harness/issues/50)
+also ends in the forced finish and prints its answer, stop reason `error_limit`), `2` configuration or key errors, `1` the endpoint failed.
 
 ### Profiles
 

@@ -127,6 +127,7 @@ def test_run_limit_exit_code_with_partial(
         chat_response("```repl\nx = 1/0\n```"),
         chat_response("```repl\nanswer['content'] = 'half'\ny = undefined\n```"),
         chat_response("```repl\nz = 1/0\n```"),
+        chat_response("I could not finish."),  # forced finish (issue #50): no FINAL
     )
     profiles = _profiles_file(tmp_path, fake_server.base_url)
     ctx = tmp_path / "ctx.txt"
@@ -148,8 +149,8 @@ def test_run_limit_exit_code_with_partial(
     )
     captured = capsys.readouterr()
     assert rc == 3
-    assert "consecutive REPL errors" in captured.err
-    assert captured.out == "half\n"
+    assert "stopped by error_limit" in captured.err
+    assert captured.out == "half\n"  # the answer dict wins over unusable reply prose
 
 
 def test_run_missing_context_is_config_error(
