@@ -179,6 +179,9 @@ REPL, never written to a trajectory, and never included in an error message.
   distractors, so answering needs two hops of reading. Exact-match on the city.
 - `examples/bench.py` — the repeatable benchmark: harness vs plain model, N seeds over a
   task × size grid, resumable (`--resume`), with a markdown summary (`--summary-only`).
+- `evals/independent/run_eval.py` — the frozen independent eval (#22): the same rlm and
+  plain modes on the eight roundtable-authored tasks, scored by each task's own
+  `score()`; resumable, with a markdown summary.
 
 ```sh
 uv run python examples/needle.py --profile pluto --lines 1000000
@@ -192,6 +195,183 @@ Live tests (`uv run pytest -m live`) run `ping`, a thinking round trip and a
 50K-line needle against pluto; they are skipped by default and in CI.
 
 ## Results
+
+There are two kinds of result here. The **independent evaluation** comes first: it uses
+tasks written by eight non-Anthropic models that had no part in building the harness.
+The smoke, benchmark, protocol and depth-2 results after it use tasks written by the
+same Claude models that wrote the harness and its prompt, so they likely overstate
+what the harness can do.
+
+### Independent evaluation (tasks written by other models)
+
+[#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22). The tasks are the eight
+generators in [`evals/independent/fixed/active/`](evals/independent/), written by the
+non-Anthropic lanes of the Flatline Roundtable. Each answer is scored by that
+generator's own `score()`, where 1.0 means exact. We did not write or change any
+question, answer key or scorer.
+
+**Frozen harness: commit `e17580fb76b06ece39ba381ce26763aa870bca90`.** Nothing was
+tuned on these tasks. The run used the default `pluto` profile, the fence protocol,
+depth 1 and default caps (20 turns, 64 sub-calls), plus `max_timeout=900` s per run.
+It took 3.5 hours on 2026-10-07, one row at a time under the pluto lock. Every
+batch's metadata records that `src/`, `examples/` and `pyproject.toml` were unchanged
+from the frozen commit.
+
+The model was the same as in the sections below: `huihui-qwen3.8-flash-next-abliterated`
+served by Strata on pluto. The runner is
+[`evals/independent/run_eval.py`](evals/independent/run_eval.py), which imports
+`bench.py`'s two modes:
+
+- **rlm** is the harness.
+- **plain** is one call with the whole context in the prompt, the better of thinking on
+  (16K output cap) and thinking off. It is recorded as "does not fit" when the prompt
+  is larger than pluto's 28,672 usable tokens.
+
+The grid was 8 tasks × small (~60K chars), medium (~300K) and large (~1.2M), with seed
+0 for every cell and seed 1 for small and medium: 80 rows and no errors. Raw rows are in
+`runs/independent-20261007.json`, with one trajectory per rlm row in `runs/` (not in
+git).
+
+Each cell shows seed 0 / seed 1. **†** marks a cell whose answer key cannot be reached
+from the context (see "Defects in the tasks" below).
+
+| Task (author model) | Size | rlm score | plain | rlm turns | rlm sub-calls | rlm s | rlm stop |
+|---|---|---|---|---|---|---|---|
+| GLaDOS (grok-4.6) | small | 1 / 0.60 | 1 / 1 | 20 / 20 | 0 / 0 | 318 / 488 | out of turns / answer_dict |
+|  | medium | 0.20 / 0.60 | does not fit (~148K tokens) | 20 / 20 | 0 / 0 | 296 / 247 | out of turns / out of turns |
+|  | large | 0.20 | does not fit (~606K tokens) | 20 | 0 | 193 | out of turns |
+| SHODAN (gpt-6-astra) | small | 0 / 0 | 1 / 0 | 20 / 20 | 10 / 0 | 475 / 178 | out of turns / out of turns |
+|  | medium | 0 / 0 | does not fit (~88K tokens) | 20 / 20 | 2 / 0 | 275 / 134 | out of turns / out of turns |
+|  | large | 0 | does not fit (~353K tokens) | 20 | 0 | 168 | out of turns |
+| TheDixieFlatline (gemini-3.1-pro-high) | small | 0† / 0† | 0† / 0† | 12 / 11 | 0 / 0 | 108 / 231 | final / answer_dict |
+|  | medium | 0† / 0 | does not fit (~96K tokens) | 14 / 17 | 0 / 0 | 99 / 181 | answer_dict / final |
+|  | large | 0 | does not fit (~396K tokens) | 20 | 0 | 180 | out of turns |
+| Cerebex (glm-5.3-flash) | small | 0 / 0 | 0.50 / 1 | 20 / 20 | 6 / 0 | 379 / 353 | out of turns / out of turns |
+|  | medium | 0 / 1 | does not fit (~93K tokens) | 20 / 20 | 0 / 0 | 300 / 460 | final / out of turns |
+|  | large | 0 | does not fit (~373K tokens) | 20 | 0 | 242 | out of turns |
+| Neuromancer (deepseek-v4-flash) | small | 1 / 1 | 1 / 1 | 10 / 16 | 0 / 0 | 77 / 315 | final / answer_dict |
+|  | medium | 0 / 1 | does not fit (~86K tokens) | 17 / 20 | 0 / 1 | 210 / 445 | final / final |
+|  | large | 0 | does not fit (~350K tokens) | 20 | 3 | 808 | out of turns |
+| SELMA (nemotron-3-super-120b-a12b) | small | 1 / 0† | 1 / 0† | 7 / 5 | 0 / 0 | 71 / 58 | answer_dict / final |
+|  | medium | 1 / 0† | does not fit (~89K tokens) | 8 / 7 | 0 / 0 | 75 / 70 | final / answer_dict |
+|  | large | 0† | does not fit (~358K tokens) | 9 | 0 | 136 | final |
+| MasterControl (mistral-medium-3.1) | small | 0.50 / 1 | 1 / 1 | 11 / 12 | 0 / 0 | 209 / 106 | answer_dict / answer_dict |
+|  | medium | 1 / 1 | does not fit (~86K tokens) | 14 / 9 | 0 / 0 | 211 / 113 | answer_dict / answer_dict |
+|  | large | 1 | does not fit (~343K tokens) | 9 | 0 | 124 | final |
+| Multivac (hermes-4-405b) | small | 0† / 0† | 0† / 0† | 7 / 4 | 0 / 0 | 54 / 23 | final / answer_dict |
+|  | medium | 0† / 0† | does not fit (~104K tokens) | 5 / 5 | 0 / 0 | 67 / 43 | answer_dict / answer_dict |
+|  | large | 0† | does not fit (~428K tokens) | 5 | 0 | 29 | answer_dict |
+
+What each task asks (from `manifest.json`):
+
+- **GLaDOS**: the net authorized amount and certifying member of a renamed project's
+  legal successor, under bylaws and an SOP.
+- **SHODAN**: the earned credit per office after signed corrections, custody findings
+  and agreement terms.
+- **TheDixieFlatline**: the final room of an asset through renames and transfers.
+- **Cerebex**: the travel total after amendments and reversals.
+- **Neuromancer**: March travel reimbursed after adjustments and denials.
+- **SELMA**: the final owner of a review after reassignments.
+- **MasterControl**: the one employee flagged for two issues, and their total.
+- **Multivac**: the status and description of a requirement after merges and splits.
+
+Accuracy by size. A cell is one task × size × seed. A plain prompt that does not fit
+scores 0.
+
+| Size | Cells | rlm mean | rlm exact | plain mean | plain exact | plain does not fit | Answerable cells | rlm mean | rlm exact | plain mean | plain exact |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| small (~60K) | 16 | 0.38 | 5/16 | 0.59 | 9/16 | 0/16 | 11 | 0.55 | 5/11 | 0.86 | 9/11 |
+| medium (~300K) | 16 | 0.36 | 5/16 | 0.00 | 0/16 | 16/16 | 12 | 0.48 | 5/12 | 0.00 | 0/12 |
+| large (~1.2M) | 8 | 0.15 | 1/8 | 0.00 | 0/8 | 8/8 | 6 | 0.20 | 1/6 | 0.00 | 0/6 |
+
+Findings:
+
+- **Where the context fits, the plain model is clearly better.** At ~60K characters,
+  plain was exact on 9 of the 11 answerable cells; the harness managed 5. Plain also
+  took a median 17 s for the chosen call, or 154 s for both variants, against 194 s
+  for the harness. On SHODAN, Cerebex and GLaDOS small, plain was exact where the
+  harness ran out of turns or finished with the wrong total. The self-authored benchmark
+  below showed a tie at this size. These tasks show a loss.
+- **Where it doesn't fit, the harness is the only option, and it is weak.** From ~300K
+  characters up, plain cannot attempt any cell. The harness was exact on 5 of 12
+  answerable medium cells and 1 of 6 large ones, with a mean of 0.48 and then 0.20. It
+  was reliable on one task, MasterControl (exact at medium and large on both seeds),
+  and good on SELMA whenever the key was answerable. It won occasionally on Neuromancer,
+  Cerebex and GLaDOS (partial credit). It never solved SHODAN at any size, nor
+  TheDixieFlatline when that task was answerable. In the self-authored benchmark, by
+  contrast, the harness was exact on every row where plain did not fit except one
+  1,000-ticket seed, up to ~16M tokens.
+- **The main failure is running out of turns.** 15 of the 40 rlm rows hit the 20-turn
+  limit, and only 2 of those 15 were then exact. The trajectories show the same pattern
+  on the reconciliation tasks (SHODAN, Cerebex, GLaDOS): many turns printing sections
+  to read them, then a hand-written regex parser per section, then the limit.
+  One example is `runs/20261007T204104Z-a03836.jsonl`, SHODAN small, where the forced
+  finish says it is "out of turns but must answer" and guesses.
+- **Qwen almost never delegates to sub-calls.** Only 5 of the 40 rlm rows made any
+  `llm_query` call. Each generator says it was built so that grep fails, yet the model
+  greps and slices the context in code and then reads the slices itself. In the
+  self-authored benchmark OOLONG-lite drew batched sub-calls. These tasks did not.
+- **Clean protocol.** 560 code executions produced 1 syntax error and 3 execution errors,
+  with 0 rejected finals, 3 turns with neither code nor a final, and no row errors or stalls.
+  The losses are in reasoning and the turn budget, not in the loop.
+- **Comparison with the earlier medium seed-0 run.** The protocol section below scored
+  the fence protocol at a mean of 0.28 with 2/8 exact on the same medium seed-0 cells.
+  This run got 0.28 and 2/8 exact again, on the same two tasks. That run looked only at
+  protocol and changed nothing; the harness is unchanged since.
+
+Harness bugs found. They are recorded here and **not fixed in this PR**, and no row was
+re-run:
+
+1. **The forced finish can return a stale REPL variable instead of the answer.** When a
+   run runs out of turns, `_forced_finish` returns the first variable it finds named
+   `final_answer`, `answer_text`, `result` or `final`. It does this before asking the
+   model, and it does not check how recent the value is. In Neuromancer large
+   (`runs/20261007T220642Z-c69a18.jsonl`), turn 20 printed `Final answer: $91049.09`,
+   which is exactly right. The run instead returned `result`, set on turn 18 to an
+   `llm_query` reply (a prose chain analysis), and scored 0. `result` is a common name
+   for a sub-call's reply, so this can recur.
+2. **The forced finish can return code as the answer.** When the model's forced-finish
+   reply has no `FINAL(...)`, the whole reply becomes the answer. Twice that reply was a
+   ```` ```repl ```` block, and the code was scored as the answer: SHODAN large seed 0
+   (`runs/20261007T215541Z-947e9c.jsonl`) and SHODAN small seed 1
+   (`runs/20261007T223915Z-dd5502.jsonl`).
+
+Defects in the tasks. The generators were left unchanged, so these rows are scored as
+the generators score them. The "answerable" columns above leave out the † cells.
+
+- **Multivac's key never matches its question.** `get_question()` and `get_answer()`
+  each call `rng.choice` separately, so the key describes a different requirement from
+  the one asked about. It mismatched in all 18 seed × size combinations checked. The
+  bug is in the original, in the author's fix and in the MiniMax fix. `check.py` only
+  tests `score(truth) == 1`, so it passed. In the rows we read, both modes answered about
+  the requirement that was asked for.
+- **TheDixieFlatline's answer is sometimes absent from the context.** The starting
+  offices are never written into the context. If the final holder never moved or
+  confirmed an office, the answer cannot be found. That happened in 3 of the 5 cells
+  run: seed 0 small and medium, and seed 1 small.
+- **SELMA's "Unassigned" key can contradict the text.** A random `unassign` event
+  produces no email, so in 3 of the 5 cells run (seed 0 large, seed 1 small and medium)
+  the key is "Unassigned" while the latest dated email names a lead. Both modes named
+  that lead.
+- **MasterControl's scorer rejects a name written inside a sentence.** Its name regex
+  runs with `IGNORECASE`, so `"Priya Patel was the only employee flagged…"` matches as
+  one long "name", and a correct answer gets 0.5. That is MasterControl small seed 0
+  for rlm. The cell is counted as answerable and the 0.5 stands.
+
+**Verdict.** On tasks written by other models, the harness does not match the
+self-authored results. Below the window, it is worse than just prompting the model.
+Above the window, it is the only way to get an answer at all, but it gets one on only
+about half of the answerable medium cells and a fifth of the large ones. Its answers
+are reliable on tasks that a few greps can solve, and weak on multi-document
+reconciliation. The clear levers are the turn budget and getting Qwen to delegate
+reading to `llm_query`, plus the two forced-finish bugs. Any change to those must be
+measured on a fresh seed or new tasks, not on these rows.
+
+### Smoke run (self-authored tasks)
+
+These tasks, like the benchmark, protocol and depth-2 tasks below, were written by the
+harness's own authors. For tasks written by other models, see
+[Independent evaluation](#independent-evaluation-tasks-written-by-other-models).
 
 `examples/eval.py --profile pluto`, seed 0, run 2026-10-07 against
 `huihui-qwen3.8-flash-next-abliterated` (Qwen3.8-Flash-Next, UD-Q4_K_XL) served by
@@ -215,6 +395,10 @@ Notes:
 - One run per task; treat these as smoke results, not a benchmark.
 
 ### Benchmark: harness vs plain model, 3 seeds
+
+The tasks in this benchmark were written by the harness's own authors. On tasks written
+by other models the harness does much worse; see
+[Independent evaluation](#independent-evaluation-tasks-written-by-other-models).
 
 [#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19). `examples/bench.py
 --profile pluto --seeds 3`, run 2026-10-07 against the same server and default profile

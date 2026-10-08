@@ -8,12 +8,12 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 ### Follow-ups from v0.1
 
 - [ ] Real benchmark: repeated runs on OOLONG / long-context QA ([#19](https://github.com/CryptoJones/ReCLamO-Harness/issues/19))
-- [ ] Independent eval on externally authored data (roundtable-authored generators in `evals/independent/`) ([#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22))
 
 ## Done
 
 ### Follow-ups from v0.1
 
+- [x] Independent eval on externally authored data (roundtable-authored generators in `evals/independent/`) ([#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22)) — PR [#33](https://github.com/CryptoJones/ReCLamO-Harness/pull/33): frozen at `e17580f`; plain beats the harness where the context fits, and above the window the harness is exact on 5/12 answerable medium and 1/6 large cells (vs 0 for plain). Two forced-finish bugs and three task-key defects recorded, not fixed
 - [x] Optional native tool-calling protocol (`execute_python` tool) ([#20](https://github.com/CryptoJones/ReCLamO-Harness/issues/20)) — PR [#30](https://github.com/CryptoJones/ReCLamO-Harness/pull/30): `--protocol tools` added; default stays `fence` (no syntax or final-answer errors in either protocol, accuracy tied)
 - [x] Live eval of depth-2 recursion (`rlm_query`) on pluto ([#18](https://github.com/CryptoJones/ReCLamO-Harness/issues/18)) — PR [#28](https://github.com/CryptoJones/ReCLamO-Harness/pull/28): default stays `max_depth=1`
 
