@@ -43,6 +43,9 @@ _STANDARD_SAMPLING = frozenset(
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL)
 _THINK_OPEN = re.compile(r"<think>.*\Z", re.DOTALL)
 _THINK_CLOSE = re.compile(r"\A.*?</think>", re.DOTALL)
+# The shortest request timeout a deadline can cap a call to (seconds, issue #51); a
+# request made with less than this left would only fail.
+MIN_REQUEST_TIMEOUT = 1.0
 
 
 @dataclass
@@ -235,8 +238,13 @@ class LMClient:
         tools: list[dict[str, Any]] | None = None,
         timeout: float | None = None,
         retry: bool = True,
+        deadline: float | None = None,
     ) -> Completion:
-        """One chat completion. ``retry=False`` makes exactly one attempt (no backoff)."""
+        """One chat completion. ``retry=False`` makes exactly one attempt (no backoff).
+
+        ``deadline`` (a ``time.monotonic()`` value, issue #51) caps every attempt's
+        request timeout by the time left and stops retrying once it has passed.
+        """
         kwargs = self.build_request(
             messages,
             role,
@@ -248,7 +256,7 @@ class LMClient:
         conn = self._conn(role)
         started = time.monotonic()
         with conn.sem:
-            response, attempts = self._call_with_retry(conn.client, kwargs, retry)
+            response, attempts = self._call_with_retry(conn.client, kwargs, retry, deadline)
         latency = time.monotonic() - started
         completion = self._parse(response, role=role, latency=latency, attempts=attempts)
         completion.endpoint = conn.endpoint.base_url
@@ -268,17 +276,28 @@ class LMClient:
     # --- internals --------------------------------------------------------
 
     def _call_with_retry(
-        self, sdk: Any, kwargs: dict[str, Any], retry: bool = True
+        self,
+        sdk: Any,
+        kwargs: dict[str, Any],
+        retry: bool = True,
+        deadline: float | None = None,
     ) -> tuple[Any, int]:
         attempts = 0
+        base_timeout = kwargs.get("timeout")
         while True:
             attempts += 1
+            if deadline is not None:
+                left = max(deadline - time.monotonic(), MIN_REQUEST_TIMEOUT)
+                kwargs["timeout"] = left if base_timeout is None else min(base_timeout, left)
             try:
                 return sdk.chat.completions.create(**kwargs), attempts
             except openai.APIError as exc:
                 if not retry or not _retryable(exc) or attempts > self.cfg.max_retries:
                     raise
-                self._sleep(self.cfg.retry_backoff * 2 ** (attempts - 1))
+                backoff = self.cfg.retry_backoff * 2 ** (attempts - 1)
+                if deadline is not None and time.monotonic() + backoff >= deadline:
+                    raise  # no time left for another attempt
+                self._sleep(backoff)
 
     @staticmethod
     def _parse(response: Any, *, role: str, latency: float, attempts: int) -> Completion:

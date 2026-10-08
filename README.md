@@ -71,6 +71,15 @@ limit stopped the run (token budget: any partial answer is printed; or `max_erro
 consecutive REPL errors, which since [#50](https://github.com/CryptoJones/ReCLamO-Harness/issues/50)
 also ends in the forced finish and prints its answer, stop reason `error_limit`), `2` configuration or key errors, `1` the endpoint failed.
 
+`max_timeout` is a wall-clock bound
+([#51](https://github.com/CryptoJones/ReCLamO-Harness/issues/51)): every root and sub-call
+request is capped by the time left, no sub-call starts after the deadline, the rest of a
+turn's blocks are skipped once it passes, and every forced finish is a single attempt
+capped at the time left plus `FORCED_FINISH_TIMEOUT` (60 s). A run therefore ends within
+`max_timeout` + 60 s + about 1 s (the shortest request timeout). The one exception is a
+REPL block that is already computing at the deadline: it may finish its `exec_timeout`,
+because killing the worker would lose the variables the forced finish reads.
+
 ### Profiles
 
 Two profiles are built in. `pluto` points at `http://pluto:8083/v1`, model

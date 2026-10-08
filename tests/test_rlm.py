@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,7 @@ from reclamo.errors import RLMTokenLimit
 from reclamo.logger import TrajectoryLogger
 from reclamo.prompts import forced_final_prompt
 from reclamo.rlm import FORCED_FINISH_TIMEOUT, RLM, describe_context
-from tests.mocklm import SECRET_REASONING, MockLM, completion
+from tests.mocklm import SECRET_REASONING, MockLM, api_timeout, completion
 
 CONTEXT = "line one\nline two\nline three\n"  # 29 chars
 
@@ -398,6 +399,108 @@ def test_timeout_inside_a_child_reaches_the_parent_as_an_error_then_forced_finis
     output = lm.root_calls[2]["messages"][-1]["content"]
     assert "RuntimeError: RLMTimeout: run exceeded max_timeout=0.3s" in output
     assert output.endswith(forced_final_prompt("time"))
+
+
+# --- issue #51: max_timeout bounds -------------------------------------------------
+
+
+def test_root_and_sub_requests_carry_the_run_deadline() -> None:
+    cfg = _cfg(max_timeout=60.0)
+    before = time.monotonic()
+    result, lm = _run(["```repl\nr = llm_query('q')\n```", "FINAL_VAR(r)"], cfg=cfg)
+    assert result.stop_reason == "final_var"
+    deadlines = {c["deadline"] for c in lm.calls}
+    assert len(deadlines) == 1  # one run, one deadline, root and sub alike
+    (deadline,) = deadlines
+    assert before + 60.0 <= deadline <= time.monotonic() + 60.0
+    assert [c["role"] for c in lm.calls] == ["root", "sub", "root"]
+
+
+def test_slow_root_request_is_cut_at_the_deadline_then_forced_finish() -> None:
+    """The root request is capped by the time left; running into it is a timeout."""
+    cfg = _cfg(max_timeout=0.3)
+    lm = MockLM(["FINAL(from the forced finish)"], latency={"root": 0.5})
+    started = time.monotonic()
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    wall = time.monotonic() - started
+    assert (result.answer, result.stop_reason) == ("from the forced finish", "timeout")
+    assert result.iterations == 0
+    first, forced = lm.root_calls
+    assert first["deadline"] is not None
+    assert forced["retry"] is False and forced["enable_thinking"] is False
+    assert forced["timeout"] == min(cfg.root.timeout, FORCED_FINISH_TIMEOUT)
+    # deadline (0.3) + the forced call's own latency (0.5) + a little slack
+    assert wall < 0.3 + 0.5 + 0.7  # slack: REPL start/close on a slow CI runner
+
+
+def test_later_blocks_are_skipped_once_the_deadline_passes(tmp_path: Path) -> None:
+    cfg = _cfg(max_timeout=0.3)
+    logger = TrajectoryLogger(tmp_path)
+    turn = (
+        "```repl\nimport time\nfinal_answer = 'half'\ntime.sleep(0.4)\n```\n"
+        "```repl\nfinal_answer = 'never set'\n```\n"
+        "```repl\nprint('never printed')\n```"
+    )
+    lm = MockLM([turn, "```repl\nprint('code is not an answer')\n```"])
+    result = RLM(cfg, lm, logger=logger).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason, result.iterations) == ("half", "timeout", 1)
+    assert result.stats["executions"] == 1
+    forced = lm.root_calls[1]["messages"][-1]["content"]
+    assert "[2 later block(s) not run: the run's time (max_timeout) ran out]" in forced
+    assert "- final_answer = half" in forced
+    assert forced.endswith(forced_final_prompt("time"))
+    events = [json.loads(line) for line in Path(logger.path).read_text().splitlines()]
+    (timeout,) = [e for e in events if e["type"] == "timeout"]
+    assert (timeout["during"], timeout["skipped_blocks"]) == ("turn", 2)
+
+
+def test_sub_calls_are_refused_past_the_deadline() -> None:
+    cfg = _cfg(max_timeout=0.3)
+    code = "```repl\nimport time\ntime.sleep(0.4)\nr = llm_query('late')\n```"
+    result, lm = _run([code, "FINAL(done)"], cfg=cfg)
+    assert (result.answer, result.stop_reason) == ("done", "timeout")
+    assert lm.sub_calls == []
+    assert (
+        "RLMTimeout: run exceeded max_timeout=0.3s" in lm.root_calls[1]["messages"][-1]["content"]
+    )
+
+
+def test_out_of_turns_forced_finish_is_bounded_too() -> None:
+    cfg = _cfg(max_iterations=1, max_timeout=600.0)
+    result, lm = _run(["```repl\nx = 1\n```", "FINAL(ok)"], cfg=cfg)
+    assert (result.answer, result.stop_reason) == ("ok", "max_iterations")
+    forced = lm.root_calls[1]
+    assert forced["retry"] is False and forced["enable_thinking"] is None  # thinking as set
+    assert forced["timeout"] <= min(cfg.root.timeout, 600.0 + FORCED_FINISH_TIMEOUT)
+
+
+def test_out_of_turns_thinking_retry_only_before_the_deadline() -> None:
+    cfg = _cfg(max_iterations=1)
+    empty = completion("", finish_reason="length")
+    result, lm = _run(["```repl\nx = 1\n```", empty, "FINAL(ok)"], cfg=cfg)
+    assert result.answer == "ok"
+    assert [c["enable_thinking"] for c in lm.root_calls[1:]] == [None, False]
+    assert all(c["retry"] is False for c in lm.root_calls[1:])
+
+
+def test_failed_forced_finish_request_falls_back_to_the_repl(tmp_path: Path) -> None:
+    logger = TrajectoryLogger(tmp_path)
+    lm = MockLM(["```repl\nfinal_answer = 'kept'\n```", api_timeout()])
+    result = RLM(_cfg(max_iterations=1), lm, logger=logger).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("kept", "max_iterations")
+    events = [json.loads(line) for line in Path(logger.path).read_text().splitlines()]
+    assert [e["why"] for e in events if e["type"] == "forced_finish_error"] == ["turns"]
+
+
+def test_wall_time_stays_within_max_timeout_plus_forced_finish() -> None:
+    """A slow server and a model that never finishes: the run still ends on time."""
+    max_timeout, latency = 0.5, 0.15
+    cfg = _cfg(max_timeout=max_timeout, max_iterations=20)
+    lm = MockLM(["```repl\nfinal_answer = 'so far'\n```"] * 30, latency=latency)
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("so far", "timeout")
+    # Bound: max_timeout + the forced call (here its latency; at most FORCED_FINISH_TIMEOUT).
+    assert result.elapsed < max_timeout + latency + 0.6
 
 
 def test_error_limit_forces_a_finish_instead_of_raising(tmp_path: Path) -> None:

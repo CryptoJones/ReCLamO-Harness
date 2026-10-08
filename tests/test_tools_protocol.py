@@ -454,3 +454,25 @@ def test_client_sends_tools_and_parses_tool_calls(fake_server) -> None:
     assert out.tool_calls and out.tool_calls[0].name == "execute_python"
     assert out.tool_calls[0].arguments == '{"code": "print(1)"}'
     assert out.content == "" and out.reasoning == "thinking"  # no fallback to reasoning
+
+
+def test_tools_later_calls_skipped_past_deadline_and_history_stays_valid() -> None:
+    """Issue #51 in the tools protocol: unrun calls still get a tool reply."""
+    lm = MockLM(
+        [
+            tool_turn(
+                py("import time\nresult = 'first'\ntime.sleep(0.4)"),
+                py("result = 'second'"),
+                call("final_answer", variable="result"),
+            ),
+            tool_turn(call("final_answer", variable="result")),
+        ]
+    )
+    result = RLM(_cfg(max_timeout=0.3), lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason, result.iterations) == ("first", "timeout", 1)
+    forced = lm.root_calls[1]["messages"]
+    assert_valid_history(forced)
+    tool_msgs = [m for m in forced if m["role"] == "tool"]
+    assert tool_msgs[1]["content"] == "Not run: the run's time (max_timeout) ran out."
+    # the final_answer next to skipped code was rejected, not accepted as the answer
+    assert tool_msgs[2]["content"].startswith("final_answer was not accepted: it was sent")

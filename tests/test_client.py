@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import threading
+import time
+from typing import Any
 
 import openai
 import pytest
 
-from reclamo.client import LMClient, Usage, split_think
+from reclamo.client import MIN_REQUEST_TIMEOUT, LMClient, Usage, split_think
 from reclamo.config import RLMConfig
 from tests.conftest import FakeServer, chat_response, make_config
+from tests.mocklm import api_timeout
 
 KEY = "sk-test-not-a-real-key"
 
@@ -147,6 +150,49 @@ def test_timeout_override_is_per_call(config: RLMConfig) -> None:
     client = _client(config)
     assert client.build_request([], "root")["timeout"] == config.root.timeout
     assert client.build_request([], "root", timeout=7.5)["timeout"] == 7.5
+
+
+class _RecordingSDK:
+    """Stands in for the openai SDK: records each attempt's timeout, then fails or answers."""
+
+    def __init__(self, failures: int) -> None:
+        self.failures = failures
+        self.timeouts: list[float] = []
+        self.chat = self
+        self.completions = self
+
+    def create(self, **kwargs: Any) -> str:
+        self.timeouts.append(kwargs["timeout"])
+        if self.failures:
+            self.failures -= 1
+            raise api_timeout()
+        return "response"
+
+
+def test_deadline_caps_each_attempt_timeout(config: RLMConfig) -> None:
+    """Issue #51: the request timeout is min(role timeout, time left)."""
+    client = _client(config)
+    sdk = _RecordingSDK(failures=1)
+    kwargs = client.build_request([], "root")
+    assert kwargs["timeout"] == 5.0
+    _resp, attempts = client._call_with_retry(sdk, kwargs, True, time.monotonic() + 2.0)
+    assert attempts == 2
+    assert all(t <= 2.0 for t in sdk.timeouts)
+    # far deadline: the role timeout still applies
+    sdk = _RecordingSDK(failures=0)
+    client._call_with_retry(sdk, client.build_request([], "root"), True, time.monotonic() + 999)
+    assert sdk.timeouts == [5.0]
+
+
+def test_deadline_stops_retries_when_no_time_is_left(fake_server: FakeServer) -> None:
+    cfg = make_config(fake_server.base_url, max_retries=3, retry_backoff=1.0)
+    sleeps: list[float] = []
+    client = LMClient(cfg, KEY, sleep=sleeps.append)
+    sdk = _RecordingSDK(failures=5)
+    with pytest.raises(openai.APITimeoutError):
+        client._call_with_retry(sdk, client.build_request([], "root"), True, time.monotonic() + 0.5)
+    assert len(sdk.timeouts) == 1 and sleeps == []  # the 1 s backoff would pass the deadline
+    assert sdk.timeouts[0] == MIN_REQUEST_TIMEOUT  # 0.5 s left is floored to the minimum
 
 
 def test_4xx_is_not_retried(fake_server: FakeServer, config: RLMConfig) -> None:
