@@ -818,7 +818,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--log-dir", default="runs", help="trajectory directory (default runs/)")
     parser.add_argument(
-        "--max-timeout", type=float, default=600.0, help="seconds per RLM run (default 600)"
+        "--max-timeout",
+        type=float,
+        default=None,
+        help="seconds per RLM run (default: the profile's, 3600 under prompt v0.2; the "
+        "published benchmark used 600)",
     )
     parser.add_argument(
         "--plain-max-tokens",
@@ -876,9 +880,11 @@ def main(argv: list[str] | None = None) -> int:
         from reclamo.config import load_config
 
         cfg = load_config(args.profile, args.profiles)
-        cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout, protocol=args.protocol)
-        if args.prompt_version:
+        if args.prompt_version:  # first, so its defaults apply before explicit flags
             cfg = dataclasses.replace(cfg, prompt_version=args.prompt_version)
+        cfg = dataclasses.replace(cfg, protocol=args.protocol)
+        if args.max_timeout is not None:
+            cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout)
     except ConfigError as exc:
         print(f"bench: {exc}", file=err)
         return 2

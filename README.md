@@ -82,11 +82,30 @@ because killing the worker would lose the variables the forced finish reads.
 
 ### Profiles
 
-Two profiles are built in. `pluto` points at `http://pluto:8083/v1`, model
-`qwen3.8-flash-next`, with Qwen's recommended sampling for thinking (root) and
-non-thinking (sub-call) turns, `concurrency = 1` (Strata serves one request at a
-time) and `context_tokens = 32768` (the KV cache that stays resident).
-`openai-compatible` is a generic profile for any OpenAI-style server.
+Three profiles are built in.
+
+- **`pluto`** points at `http://pluto:8083/v1`, model `qwen3.8-flash-next`, with
+  Qwen's recommended sampling for thinking (root) and non-thinking (sub-call) turns,
+  and `context_tokens = 32768`. That is the old resident window, and it keeps every
+  request in Strata's fast range.
+- **`pluto-long`** is the same server, model, key and sampling with `context_tokens =
+  131072` and a 30-minute request timeout for root, sub and the plain baseline. See
+  [`pluto-long`](#pluto-long-a-fair-plain-baseline-above-32k) below.
+- **`openai-compatible`** is a generic profile for any OpenAI-style server.
+
+**Concurrency 2 on pluto (since 2026-10-08).** Strata now serves two requests at once
+(`"parallel": 2`, int8 KV, 64K resident; `/v1/status` reports `concurrency.serving=2`).
+`pluto` and `pluto-long` therefore set `concurrency = 2`, so `llm_query_batched` uses
+both slots. Measured on that change: single-request decode fell from 46 to 35 tok/s,
+and a 63K-token prompt read at 227 tok/s. Concurrency is per endpoint. A planner on its
+own `base_url` keeps its own `concurrency` (the two-endpoint examples below keep the
+planner at 1). To undo it, set `concurrency = 1` on the profile. Runs before
+2026-10-08 used 1.
+
+**Sub-call thinking** is a profile switch, `[profiles.<name>.sub] enable_thinking`, or
+`--sub-thinking` for one `reclamo run`. It is off on `pluto` because Strata is slow and
+serial per slot. The paper's sub-model was a reasoning model (GPT-5 with GPT-5-mini
+sub-calls), so turning it on is the closer match when time allows.
 
 Add or override profiles in `~/.config/reclamo/profiles.toml` (or the file named by
 `RECLAMO_PROFILES`). Fields you leave out keep the built-in values:
@@ -127,7 +146,7 @@ table may set `base_url`, `api_key_env`, `api_key_cmd` and `concurrency`; anythi
 leaves out inherits the profile-level value, so existing profiles are unchanged. Each
 distinct `base_url` gets its own HTTP client, key and semaphore: sub-calls to pluto
 are not queued behind root turns on another host, while roles that share a URL still
-share one semaphore (pluto stays one request at a time). Roles that share a URL must
+share one semaphore (pluto's two slots are shared by its roles). Roles that share a URL must
 agree on the key source and concurrency. `reclamo ping` checks every endpoint in the
 profile and reports each one under its own `base_url:` heading.
 
@@ -140,7 +159,7 @@ is a placeholder until the trained adapter exists:
 [profiles.planner-8b]        # profile level = the reader (pluto), as in [profiles.pluto]
 base_url = "http://pluto:8083/v1"
 api_key_cmd = "pass pluto/flashnext-api-key"
-concurrency = 1
+concurrency = 2              # pluto's two slots; the planner below keeps its own 1
 context_tokens = 32768
 
 [profiles.planner-8b.root]   # the planner, on a local server
@@ -208,7 +227,7 @@ GGUF [`cameronbergh/rlm-qwen3-8b-v0.1-gguf`](https://huggingface.co/cameronbergh
 [profiles.rlm-qwen3-8b]         # profile level = the reader (pluto)
 base_url = "http://pluto:8083/v1"
 api_key_cmd = "pass pluto/flashnext-api-key"
-concurrency = 1
+concurrency = 2                 # pluto's two slots; the planner below keeps its own 1
 context_tokens = 32768
 planner_style = "upstream-rlm-v0"
 output_truncate_chars = 20000   # upstream cuts each block's output at 20,000 chars
@@ -292,7 +311,56 @@ near four. An oversized prompt fails as a server error inside the REPL, which th
 sees and can recover from.
 
 The copied upstream text keeps its MIT notice beside it in `src/reclamo/prompts.py`.
-`max_iterations`, `output_truncate_chars` and sampling are unchanged by v0.2.
+The prompt text is not the only thing v0.2 changes: see the defaults below. Sampling is
+unchanged.
+
+### v0.2 defaults: limits we no longer impose
+
+[#61](https://github.com/CryptoJones/ReCLamO-Harness/issues/61). These defaults follow
+`prompt_version`. A field you leave unset takes its version's value, and a value set in
+a profile, the user file or code always wins. `prompt_version = "v0.1"` restores every
+old value, so published results stay reproducible. (One caveat: under v0.1 an unset sub
+`max_tokens` is now 2,048, the built-in profiles' old value, where a hand-written
+profile used to get 4,096.)
+
+| Setting | v0.1 | v0.2 | Why / source |
+|---|---|---|---|
+| `max_iterations` | 20 | 30 | Upstream rlm `main` default (`rlm/core/rlm.py`, `_DEFAULT_MAX_ITERATIONS = 30` in `rlm/utils/prompts.py`). In the #22 re-run, 15 of 40 rlm rows used all 20 turns |
+| `output_truncate_chars` | 2,000 | 20,000 | Upstream v1.0.0 `rlm/utils/parsing.py` cuts each REPL output at 20,000 chars; its prompt says "REPL outputs over ~20K characters are truncated". Compaction ([#49](https://github.com/CryptoJones/ReCLamO-Harness/issues/49)) shrinks oversized turns to fit the window (tested at 20K on a 32K window) |
+| root `max_tokens` | 4,096 | 8,192 with thinking on (4,096 off) | Paper App. B: "Thinking models without sufficient output tokens struggle as RLMs" |
+| sub `max_tokens` | 2,048 | 4,096 | Room for a full answer from a big sub-call |
+| `max_subcalls_per_run` | 64 | 256 | The paper's failure mode was "thousands of LM subcalls" (App. C), not hundreds. The cap stays as a safety net |
+| `max_subcalls_per_exec` | 24 | 64 | The same |
+| `max_timeout` (also `bench.py` / `run_eval.py`) | 1,800 s (scripts: 600 / 900 s) | 3,600 s | Time is not the constraint (CJ, 2026-10-08) |
+| reply cut off by the output limit | retried without thinking only if empty | also continued once (thinking off) when cut part-way with no usable action, and retried without thinking when the "content" is cut-off reasoning | Paper App. B, the same finding |
+
+Unchanged on purpose: `max_depth` (1), `protocol` (fence), sampling, and pluto's
+`context_tokens` (32,768).
+
+A cost on `pluto`: the larger root reply reserve shrinks the plain baseline's usable
+window from 28,672 to 24,576 estimated tokens. GLaDOS small (about 26.8K estimated
+tokens) no longer fits there. Use `pluto-long` for plain.
+
+#### `pluto-long`: a fair plain baseline above 32K
+
+Strata accepts prompts far beyond its resident KV, but on `pluto` the profile's
+`context_tokens = 32768` also capped the **plain** baseline, whose usable window is
+`context_tokens` minus the root output reserve. Every medium and large plain row was
+therefore "does not fit". That was our limit, not the hardware's.
+
+`pluto-long` sets `context_tokens = 131072`. That is not Strata's full 262K: medium
+contexts run about 90–150K estimated tokens, and the estimate runs high on
+digit-heavy text. It also sets a 1,800 s request timeout for root and sub (150K tokens
+at ~200 tok/s is about 750 s of prompt reading before generation). The plain call uses
+the root timeout, so it is covered too. Everything else matches `pluto`.
+
+With `--profile pluto-long` the plain baseline fits all 16 small and 14 of 16 medium
+cells of the independent eval (seeds 0 and 1). Only GLaDOS medium, at about 148K
+estimated tokens, still does not fit. No large cell fits. The cost is speed: prompt
+reading drops from ~500 to ~200 tok/s past the resident window, so a 100K-token plain
+call spends about 8 minutes reading. Under v0.2 the advertised sub-call size follows
+the window too, about 324K chars, which makes "one big sub-call" possible at the same
+cost.
 
 ### Context budget
 

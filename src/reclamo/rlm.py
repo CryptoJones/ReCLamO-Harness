@@ -129,6 +129,11 @@ FORCED_STOP_REASONS = {
 # deadline (up to exec_timeout); its sub-calls are refused, but it is not killed,
 # because killing the worker would lose every variable the forced finish needs.
 FORCED_FINISH_TIMEOUT = 60.0
+# Prompt v0.2 (issue #61): sent once, thinking off, when a reply is cut off part-way.
+CONTINUE_PROMPT = (
+    "Your last message was cut off by the output limit. Continue it from exactly where "
+    "it stopped, without repeating anything."
+)
 CHARS_PER_TOKEN = 3.5
 # Issue #49: the request must fit the window with room for the root reply. The input
 # budget is context_tokens - root max_tokens - FIT_MARGIN * context_tokens (the margin
@@ -979,7 +984,64 @@ class RLM:
             )
             completion = self._deadline_call(history, {**extra, "enable_thinking": False})
             completion.attempts += 1
+        elif self._cut_mid_reply(completion):
+            completion = self._continue_reply(history, extra, completion, notes)
         return completion, notes
+
+    def _cut_mid_reply(self, completion: Completion) -> bool:
+        """Prompt v0.2 (issue #61): the reply hit the output limit after it had started,
+        and what arrived is not a usable action (no complete code block, an unclosed
+        one, or no FINAL). v0.1 only retried a reply with no content at all."""
+        if (
+            self.cfg.prompt_version == "v0.1"
+            or self.cfg.planner_style != "reclamo"
+            or completion.finish_reason != "length"
+            or completion.tool_calls
+            or not completion.content.strip()
+        ):
+            return False
+        if completion.content_from_reasoning:
+            return True  # the "content" is cut-off thinking: no answer began
+        content = completion.content
+        complete = find_code_blocks(content, strict=True)
+        if len(find_code_blocks(content)) > len(complete):
+            return True  # a code block was cut open
+        return not complete and find_final(content) is None
+
+    def _continue_reply(
+        self,
+        history: list[dict[str, Any]],
+        extra: dict[str, Any],
+        cut: Completion,
+        notes: list[str],
+    ) -> Completion:
+        """Ask once, thinking off, for the rest of a cut-off reply and join the parts.
+        Cut-off thinking (no reply begun) is retried without thinking instead."""
+        if cut.content_from_reasoning:
+            notes.append(
+                "[note] the previous attempt spent its whole output budget thinking; "
+                "it was retried without thinking."
+            )
+            retry = self._deadline_call(history, {**extra, "enable_thinking": False})
+            retry.attempts = cut.attempts + 1
+            return retry
+        asked = [
+            *history,
+            {"role": "assistant", "content": cut.content},
+            {"role": "user", "content": CONTINUE_PROMPT},
+        ]
+        rest = self._deadline_call(asked, {**extra, "enable_thinking": False})
+        notes.append(
+            "[note] the previous reply hit the output limit part-way; it was continued "
+            "once and the two parts were joined."
+        )
+        return dataclasses.replace(
+            cut,
+            content=cut.content + rest.content,
+            finish_reason=rest.finish_reason,
+            latency=cut.latency + rest.latency,
+            attempts=cut.attempts + 1,
+        )
 
     def _deadline_call(self, history: list[dict[str, Any]], extra: dict[str, Any]) -> Completion:
         if self._past_deadline():

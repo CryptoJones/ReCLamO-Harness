@@ -254,3 +254,30 @@ def test_run_protocol_tools_sends_tools_and_finishes_on_final_answer(
     msgs = posts[1].body["messages"]
     assert msgs[2]["tool_calls"][0]["id"] == "c1"
     assert msgs[3] == {"role": "tool", "tool_call_id": "c1", "content": "12"}
+
+
+def test_run_prompt_version_and_sub_thinking_flags(
+    fake_server: FakeServer,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("RECLAMO_API_KEY", "sk-test")
+    fake_server.script(
+        chat_response("```repl\nprint(llm_query('hi'))\n```"),
+        chat_response("sub answer"),
+        chat_response("FINAL(ok)"),
+    )
+    profiles = _profiles_file(tmp_path, fake_server.base_url)
+    ctx = tmp_path / "ctx.txt"
+    ctx.write_text("x", encoding="utf-8")
+    argv = ["run", "--profile", "fake", "--profiles", str(profiles), "--context", str(ctx)]
+    argv += ["-q", "?", "--log-dir", str(tmp_path / "runs"), "--prompt-version", "v0.1"]
+    rc = main([*argv, "--sub-thinking", "--max-iterations", "3"])
+    assert rc == 0 and capsys.readouterr().out == "ok\n"
+    posts = [r for r in fake_server.requests if r.method == "POST"]
+    system = posts[0].body["messages"][0]["content"]
+    assert "sub-calls are expensive" in system  # the v0.1 prompt
+    assert posts[0].body["max_tokens"] == 4_096  # v0.1 root default
+    assert posts[1].body["chat_template_kwargs"]["enable_thinking"] is True  # the sub-call
+    assert posts[1].body["max_tokens"] == 2_048  # v0.1 sub default

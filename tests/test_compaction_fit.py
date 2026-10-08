@@ -154,3 +154,28 @@ def test_forced_finish_that_cannot_fit_at_all_falls_back_without_a_call(tmp_path
     assert (result.answer, result.stop_reason) == ("", "context_overflow")
     assert lm.root_calls == []
     assert [e["action"] for e in _events(logger, "context_overflow")[1:]] == ["no_model_call"]
+
+
+def test_v02_defaults_on_a_pluto_window_keep_every_request_in_budget(tmp_path: Path) -> None:
+    """Issue #61: 20,000-char REPL outputs and an 8,192-token root reply on a 32K window.
+    Compaction (#49) must keep every root request under the budget."""
+    cfg = RLMConfig(
+        name="t",
+        base_url="http://unused/v1",
+        context_tokens=32_768,
+        exec_timeout=10.0,
+        root=ModelConfig(model="m", enable_thinking=True),
+        sub=ModelConfig(model="m"),
+    )
+    assert (cfg.output_truncate_chars, cfg.root.max_tokens, cfg.max_iterations) == (
+        20_000, 8_192, 30,
+    )  # fmt: skip
+    loud = [_loud_turn(2, 20_000).replace("'a'", repr(chr(97 + i))) for i in range(10)]
+    lm = MockLM([*loud, "FINAL(done)"])
+    logger = TrajectoryLogger(tmp_path)
+    result = RLM(cfg, lm, logger=logger).completion(CONTEXT, "?")
+    assert result.answer == "done" and result.stop_reason == "final"
+    budget = _budget(cfg)
+    assert max(_sizes(lm, cfg)) <= budget
+    # outputs really were 20K (not cut to 2K by the REPL) before compaction shrank them
+    assert any(len(m["content"]) > 15_000 for c in lm.root_calls[:2] for m in c["messages"])

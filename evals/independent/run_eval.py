@@ -69,7 +69,6 @@ SIZES = ("small", "medium", "large")
 MODES = ("rlm", "plain", "plain-think", "plain-nothink")
 DEFAULT_MODES = ("rlm", "plain")
 PLAIN_MODES = ("plain", "plain-think", "plain-nothink")
-DEFAULT_MAX_TIMEOUT = 900.0
 RowRunner = Callable[[str, str, str, int], dict[str, Any]]
 
 
@@ -512,8 +511,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--max-timeout",
         type=float,
-        default=DEFAULT_MAX_TIMEOUT,
-        help="seconds per RLM run (default %(default)s)",
+        default=None,
+        help="seconds per RLM run (default: the profile's, 3600 under prompt v0.2; the "
+        "published runs used 900)",
     )
     parser.add_argument(
         "--plain-max-tokens",
@@ -555,9 +555,10 @@ def main(argv: list[str] | None = None) -> int:
         from reclamo.config import load_config
 
         cfg = load_config(args.profile, args.profiles)
-        cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout)
-        if args.prompt_version:
+        if args.prompt_version:  # first, so its defaults apply before explicit flags
             cfg = dataclasses.replace(cfg, prompt_version=args.prompt_version)
+        if args.max_timeout is not None:
+            cfg = dataclasses.replace(cfg, max_timeout=args.max_timeout)
     except ConfigError as exc:
         print(f"run_eval: {exc}", file=err)
         return 2
