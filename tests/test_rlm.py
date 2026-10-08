@@ -555,7 +555,9 @@ def test_length_finish_with_empty_content_retries_without_thinking() -> None:
 
 
 def test_compaction_stubs_old_outputs_and_keeps_full_history_in_repl(tmp_path: Path) -> None:
-    cfg = _cfg(context_tokens=1_600, max_iterations=8)  # limit ~1,360 tokens ~ 4,760 chars
+    # input budget = 2,000 - 256 (root max_tokens) - 200 (10% margin) = 1,544 est. tokens
+    root_cfg = ModelConfig(model="m", enable_thinking=True, max_tokens=256)
+    cfg = _cfg(context_tokens=2_000, max_iterations=8, root=root_cfg)
     loud = "```repl\nprint('x' * 400)\n```"
     root = [
         loud,
@@ -584,7 +586,7 @@ def test_compaction_stubs_old_outputs_and_keeps_full_history_in_repl(tmp_path: P
 
     events = [json.loads(line) for line in Path(logger.path).read_text().splitlines()]
     compactions = [e for e in events if e["type"] == "compaction"]
-    assert compactions and compactions[0]["elided_turns"]
+    assert compactions and any(c["elided_turns"] for c in compactions)
     if compactions[0]["summarized"]:
         assert any("[Summary of elided REPL output" in m["content"] for m in last_messages)
         assert lm.sub_calls

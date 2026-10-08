@@ -248,9 +248,32 @@ Caveats:
   Qwen3-8B. Here the reader is Flash-Next, whose answers will read differently.
 - The prompt advertises `llm_query` at "~100k chars". Our per-block and per-run sub-call caps
   still apply, and a block that exceeds them gets an error, which the checkpoint never saw.
-- 20,000-character outputs are large for a 32K window; compaction elides old outputs when the
-  history nears `context_tokens`. Lower `output_truncate_chars` if the planner runs out of room.
+- 20,000-character outputs are large for a 32K window, and this checkpoint writes about ten
+  blocks a turn. Compaction keeps every request inside the window (see *Context budget* below),
+  shrinking even the newest turn's outputs when it must. Lower `output_truncate_chars` so the
+  planner sees more of each output.
 - Not yet run against a hosted copy: that smoke run is [#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40).
+
+### Context budget
+
+Every root request is kept under an input budget of `context_tokens` − the root role's
+`max_tokens` − 10% of `context_tokens` (the margin absorbs estimate error), and never less
+than a quarter of `context_tokens` ([#49](https://github.com/CryptoJones/ReCLamO-Harness/issues/49)).
+The estimate counts one token per digit and 3.5 characters per token otherwise, and it
+includes the tool specs and upstream's per-turn prompt. Before each turn the history is
+brought under the budget in three steps:
+
+1. REPL outputs older than the last four are replaced by stubs and, if that is not
+   enough, summarized with one sub-call (unchanged).
+2. If it still does not fit, as when one turn's outputs alone overflow the window, the
+   remaining REPL outputs are shrunk, largest first and oldest first among equals. Each
+   keeps its head and tail around a stub that says how much was cut and that the full
+   text is in the REPL's `history` variable. The model's own code, the notes and the turn
+   line are never cut.
+3. If the request still cannot fit, it is not sent. The run logs `context_overflow` and
+   takes the forced finish (stop reason `context_overflow`) with only the opening
+   messages and the REPL state. If even that is over the budget, there is no model call
+   and the run falls back to the REPL values.
 
 ### Trajectories and the SFT log
 
@@ -264,7 +287,10 @@ Every run writes `runs/<UTC timestamp>-<id>.jsonl`, one JSON object per line:
 - `subcall` — depth, kind (`llm_query`, `llm_query_batched`, `rlm_query`), prompt and
   answer sizes, latency, running count, and the `endpoint` and `model` that answered
   (absent for an `rlm_query` that recursed; the child's own turns carry them)
-- `compaction` — when older REPL outputs were elided from the history
+- `compaction` — when REPL outputs were elided, summarized or shrunk to fit (sizes, budget,
+  `elided_turns`, `shrunk_messages`)
+- `context_overflow` — a request could not be made to fit the window: the estimated size, the
+  budget, `context_tokens` and `max_tokens`, and what the forced finish did instead
 - `forced_finish` and `final` — how the run ended. `forced_finish.source` says where a
   forced answer came from: `model` (a valid `FINAL` / `FINAL_VAR` / `final_answer` in
   the forced reply), `answer_dict`, `variable` (with its name), `reply_text` (the
