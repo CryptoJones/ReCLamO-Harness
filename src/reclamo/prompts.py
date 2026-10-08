@@ -252,6 +252,39 @@ def forced_final_prompt(why: str = "turns", protocol: str = "fence") -> str:
     )
 
 
+FORCED_VALUE_CHARS = 300
+FORCED_OUTPUT_CHARS = 500
+
+
+def _clip(text: str, limit: int, *, tail: bool = False) -> str:
+    if len(text) <= limit:
+        return text
+    if tail:
+        return f"[... {len(text) - limit} chars cut]{text[-limit:]}"
+    return f"{text[:limit]}[... {len(text) - limit} chars cut]"
+
+
+def forced_final_state(values: list[tuple[str, str]], last_output: str | None) -> str:
+    """What the REPL holds right now, shown before the forced-finish request.
+
+    ``values`` are ``(name, value)`` pairs: ``answer['content']`` and any of the
+    usual answer variable names that exist. The model sees them so it can point
+    at one with ``FINAL_VAR`` instead of the loop guessing which one is current.
+    Returns "" when there is nothing to show.
+    """
+    parts: list[str] = []
+    if values:
+        lines = [f"Current values in the REPL (each cut to {FORCED_VALUE_CHARS} chars):"]
+        for name, value in values:
+            lines.append(f"- {name} = {_clip(value, FORCED_VALUE_CHARS)}")
+        parts.append("\n".join(lines))
+    if last_output and last_output.strip():
+        parts.append(
+            "Last REPL output (end):\n" + _clip(last_output.strip(), FORCED_OUTPUT_CHARS, tail=True)
+        )
+    return "\n\n".join(parts)
+
+
 def no_action_prompt(protocol: str = "fence") -> str:
     if protocol == "tools":
         return (

@@ -100,6 +100,19 @@ def find_code_blocks(text: str, strict: bool = False) -> list[str]:
     return blocks
 
 
+_FENCE_OPEN_TAIL = re.compile(r"^[ \t]*```.*\Z", re.DOTALL | re.MULTILINE)
+
+
+def strip_code(text: str) -> str:
+    """Remove thinking and every fenced block (any language, closed or cut off).
+
+    What is left is the prose of the reply, stripped. Used by the forced finish
+    so a reply that is a code block is never taken as the answer.
+    """
+    visible = _FENCE.sub("", strip_think(text))
+    return _FENCE_OPEN_TAIL.sub("", visible).strip()
+
+
 def _blank_fences(text: str) -> str:
     """Replace every fenced block (any language) with whitespace of the same length.
 
@@ -191,5 +204,6 @@ __all__ = [
     "find_code_blocks",
     "find_final",
     "looks_like_plan",
+    "strip_code",
     "strip_think",
 ]

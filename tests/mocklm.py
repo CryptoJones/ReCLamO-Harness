@@ -60,10 +60,19 @@ class MockLM:
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> Completion:
         msgs = [dict(m) for m in messages]
         self.calls.append(
-            {"role": role, "messages": msgs, "enable_thinking": enable_thinking, "tools": tools}
+            {
+                "role": role,
+                "messages": msgs,
+                "enable_thinking": enable_thinking,
+                "tools": tools,
+                "timeout": timeout,
+                "retry": retry,
+            }
         )
         if role == "root":
             if not self.root:

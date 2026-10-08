@@ -136,6 +136,19 @@ def test_retries_exhausted_raises(fake_server: FakeServer, config: RLMConfig) ->
     assert len(fake_server.requests) == 3
 
 
+def test_retry_false_makes_one_attempt(fake_server: FakeServer, config: RLMConfig) -> None:
+    fake_server.script(500, chat_response("never reached"))
+    with pytest.raises(openai.InternalServerError):
+        _client(config).complete([{"role": "user", "content": "q"}], retry=False)
+    assert len(fake_server.requests) == 1
+
+
+def test_timeout_override_is_per_call(config: RLMConfig) -> None:
+    client = _client(config)
+    assert client.build_request([], "root")["timeout"] == config.root.timeout
+    assert client.build_request([], "root", timeout=7.5)["timeout"] == 7.5
+
+
 def test_4xx_is_not_retried(fake_server: FakeServer, config: RLMConfig) -> None:
     fake_server.script(400)
     with pytest.raises(openai.BadRequestError):

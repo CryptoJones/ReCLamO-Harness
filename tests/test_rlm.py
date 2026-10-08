@@ -10,7 +10,7 @@ from reclamo.config import ModelConfig, RLMConfig
 from reclamo.errors import RLMErrorLimit, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger
 from reclamo.prompts import forced_final_prompt
-from reclamo.rlm import RLM, describe_context
+from reclamo.rlm import FORCED_FINISH_TIMEOUT, RLM, describe_context
 from tests.mocklm import SECRET_REASONING, MockLM, completion
 
 CONTEXT = "line one\nline two\nline three\n"  # 29 chars
@@ -284,17 +284,24 @@ def test_decompose_nudge_when_whole_context_sent_to_one_call() -> None:
 # --- limits -------------------------------------------------------------------
 
 
-def test_max_iterations_prefers_existing_variable_without_calling_model() -> None:
+def test_max_iterations_shows_existing_variable_and_model_points_at_it() -> None:
+    # The forced finish now always asks once (a variable can be stale, issue #22),
+    # but shows the variable so keeping it is one FINAL_VAR away (paper E.2).
     cfg = _cfg(max_iterations=1)
-    result, lm = _run(["```repl\nfinal_answer = 'picked'\n```"], cfg=cfg)
+    result, lm = _run(["```repl\nfinal_answer = 'picked'\n```", "FINAL_VAR(final_answer)"], cfg=cfg)
     assert (result.answer, result.stop_reason) == ("picked", "max_iterations")
-    assert len(lm.root_calls) == 1
+    assert len(lm.root_calls) == 2
+    assert "- final_answer = picked" in lm.root_calls[1]["messages"][-1]["content"]
 
 
-def test_max_iterations_prefers_unready_answer_dict() -> None:
+def test_max_iterations_falls_back_to_unready_answer_dict() -> None:
     cfg = _cfg(max_iterations=1)
-    result, lm = _run(["```repl\nanswer['content'] = 'partial'\n```"], cfg=cfg)
-    assert result.answer == "partial" and len(lm.root_calls) == 1
+    result, lm = _run(
+        ["```repl\nanswer['content'] = 'partial'\n```", "```repl\nprint(answer)\n```"],
+        cfg=cfg,
+    )
+    assert result.answer == "partial" and len(lm.root_calls) == 2
+    assert "- answer['content'] = partial" in lm.root_calls[1]["messages"][-1]["content"]
 
 
 def test_max_iterations_forced_model_call_when_nothing_exists() -> None:
@@ -306,14 +313,42 @@ def test_max_iterations_forced_model_call_when_nothing_exists() -> None:
     assert "Turn 2/1" not in lm.root_calls[1]["messages"][-1]["content"]
 
 
-def test_timeout_at_root_finishes_from_existing_value() -> None:
+def test_timeout_at_root_falls_back_to_existing_value() -> None:
     cfg = _cfg(max_timeout=0.3)
     lm = MockLM(
-        ["```repl\nimport time\nanswer['content'] = 'so far'\ntime.sleep(0.5)\n```", "FINAL(x)"]
+        [
+            "```repl\nimport time\nanswer['content'] = 'so far'\ntime.sleep(0.5)\n```",
+            "```repl\nprint('more work')\n```",
+        ]
     )
     result = RLM(cfg, lm).completion(CONTEXT, "?")
     assert (result.answer, result.stop_reason, result.iterations) == ("so far", "timeout", 1)
-    assert len(lm.root_calls) == 1
+    assert len(lm.root_calls) == 2
+
+
+def test_timeout_forced_finish_is_one_bounded_call() -> None:
+    cfg = _cfg(max_timeout=0.3)
+    lm = MockLM(
+        [
+            "```repl\nimport time\nresult = 'stale'\ntime.sleep(0.5)\n```",
+            completion("", finish_reason="length"),  # would be retried on the turns path
+        ]
+    )
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("stale", "timeout")
+    forced = lm.root_calls[1]
+    assert len(lm.root_calls) == 2
+    assert forced["enable_thinking"] is False and forced["retry"] is False
+    assert forced["timeout"] == min(cfg.root.timeout, FORCED_FINISH_TIMEOUT)
+
+
+def test_timeout_forced_finish_fresh_final_beats_stale_variable() -> None:
+    cfg = _cfg(max_timeout=0.3)
+    lm = MockLM(
+        ["```repl\nimport time\nresult = 'stale'\ntime.sleep(0.5)\n```", "FINAL($91049.09)"]
+    )
+    result = RLM(cfg, lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("$91049.09", "timeout")
 
 
 def test_timeout_at_root_asks_the_model_once_when_nothing_is_ready() -> None:
@@ -466,3 +501,98 @@ def test_ready_answer_wins_over_error_limit() -> None:
     result, lm = _run([code], cfg=cfg)
     assert (result.answer, result.stop_reason) == ("done", "answer_dict")
     assert len(lm.root_calls) == 1
+
+
+# --- forced finish (issue #22: stale variable, code as answer) -------------------
+
+
+def _forced(root: list[Any], tmp_path: Path) -> tuple[Any, MockLM, dict[str, Any]]:
+    logger = TrajectoryLogger(tmp_path)
+    lm = MockLM(root)
+    result = RLM(_cfg(max_iterations=2), lm, logger=logger).completion(CONTEXT, "?")
+    events = [json.loads(line) for line in Path(logger.path).read_text().splitlines()]
+    (event,) = [e for e in events if e["type"] == "forced_finish"]
+    return result, lm, event
+
+
+STALE_THEN_PRINT = [
+    "```repl\nresult = llm_query('analyse the chain')\n```",
+    "```repl\nprint('Final answer: $91049.09')\n```",
+]
+
+
+def test_forced_finish_fresh_final_beats_stale_result_variable(tmp_path: Path) -> None:
+    """Neuromancer large: the answer was printed last turn, `result` was two turns old."""
+    result, lm, event = _forced([*STALE_THEN_PRINT, "FINAL($91049.09)"], tmp_path)
+    assert (result.answer, result.stop_reason) == ("$91049.09", "max_iterations")
+    prompt = lm.root_calls[2]["messages"][-1]["content"]
+    assert "- result = sub:analyse the chain" in prompt
+    assert "Last REPL output (end):\nFinal answer: $91049.09" in prompt
+    assert prompt.endswith(forced_final_prompt())
+    assert event["source"] == "model" and event["shown"] == ["result"]
+
+
+def test_forced_finish_final_var_returns_that_variable(tmp_path: Path) -> None:
+    result, _, event = _forced([*STALE_THEN_PRINT, "FINAL_VAR(result)"], tmp_path)
+    assert result.answer == "sub:analyse the chain"
+    assert (event["source"], event["kind"]) == ("model", "final_var")
+
+
+def test_forced_finish_code_reply_falls_back_to_variable_not_code(tmp_path: Path) -> None:
+    """SHODAN: the forced reply was a ```repl block and was scored as the answer."""
+    code = "```repl\ntotal = sum(credits)\nprint(total)\n```"
+    result, _, event = _forced([*STALE_THEN_PRINT, code], tmp_path)
+    assert result.answer == "sub:analyse the chain"
+    assert "```" not in result.answer
+    assert (event["source"], event["variable"]) == ("variable", "result")
+
+
+def test_forced_finish_answer_dict_beats_variable_in_fallback(tmp_path: Path) -> None:
+    root = [
+        "```repl\nresult = 'old'\n```",
+        "```repl\nanswer['content'] = 'built'\n```",
+        "```repl\nprint(1)\n```",
+    ]
+    result, _, event = _forced(root, tmp_path)
+    assert result.answer == "built" and event["source"] == "answer_dict"
+
+
+def test_forced_finish_code_reply_with_nothing_in_repl_is_not_returned(tmp_path: Path) -> None:
+    root = ["```repl\nx = 1\n```", "```repl\ny = 2\n```", "```repl\nprint(x + y)\n```"]
+    result, _, event = _forced(root, tmp_path)
+    assert result.answer == "" and event["source"] == "empty"
+
+
+def test_forced_finish_code_reply_keeps_its_prose(tmp_path: Path) -> None:
+    root = [
+        "```repl\nx = 1\n```",
+        "```repl\ny = 2\n```",
+        "<think>FINAL(no)</think>The total is 3.\n\n```repl\nprint(x + y)\n```",
+    ]
+    result, _, event = _forced(root, tmp_path)
+    assert result.answer == "The total is 3." and event["source"] == "reply_text"
+
+
+def test_forced_finish_drops_plan_prose_and_code_intros(tmp_path: Path) -> None:
+    for reply in (
+        "Let me compute the total first.\n```repl\nprint(1)\n```",
+        "Here is the code:\n```repl\nprint(1)\n```",
+        "```repl\nprint(1)",  # fence cut off by the output cap
+    ):
+        result, _, _ = _forced(["```repl\nx = 1\n```", "```repl\ny = 2\n```", reply], tmp_path)
+        assert result.answer == "", reply
+
+
+def test_forced_finish_rejected_final_falls_back_not_to_its_text(tmp_path: Path) -> None:
+    result, _, event = _forced([*STALE_THEN_PRINT, "FINAL_VAR(missing)"], tmp_path)
+    assert result.answer == "sub:analyse the chain"
+    assert event["source"] == "variable"
+    assert event["rejected"] == "there is no variable named `missing`."
+
+
+def test_forced_finish_long_values_are_cut(tmp_path: Path) -> None:
+    root = ["```repl\nfinal = 'z' * 5000\n```", "```repl\nx = 1\n```", "FINAL_VAR(final)"]
+    result, lm, _ = _forced(root, tmp_path)
+    assert result.answer == "z" * 5000  # the value itself is returned whole
+    prompt = lm.root_calls[2]["messages"][-1]["content"]
+    assert "- final = " + "z" * 300 + "[... 4700 chars cut]" in prompt

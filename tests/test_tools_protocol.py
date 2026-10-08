@@ -290,10 +290,57 @@ def test_error_limit_still_enforced() -> None:
         RLM(cfg, lm).completion(CONTEXT, "?")
 
 
-def test_forced_finish_uses_existing_value_first() -> None:
-    result, lm = _run([tool_turn(py("final_answer = 'picked'"))], cfg=_cfg(max_iterations=1))
+def test_forced_finish_falls_back_to_existing_value() -> None:
+    # The forced finish always asks once now (issue #22); an execute_python call in
+    # that reply never runs, so the existing variable is the fallback.
+    result, lm = _run(
+        [tool_turn(py("final_answer = 'picked'")), tool_turn(py("print('more')"))],
+        cfg=_cfg(max_iterations=1),
+    )
     assert (result.answer, result.stop_reason) == ("picked", "max_iterations")
-    assert len(lm.root_calls) == 1
+    assert len(lm.root_calls) == 2
+    assert "- final_answer = picked" in lm.root_calls[1]["messages"][-1]["content"]
+
+
+def test_forced_finish_tool_call_beats_stale_variable() -> None:
+    result, _ = _run(
+        [tool_turn(py("result = 'stale'")), tool_turn(call("final_answer", answer="fresh"))],
+        cfg=_cfg(max_iterations=1),
+    )
+    assert result.answer == "fresh"
+
+
+def test_forced_finish_accepts_final_text_in_tools_mode() -> None:
+    result, _ = _run(
+        [tool_turn(py("result = 'stale'")), "FINAL(fresh)"], cfg=_cfg(max_iterations=1)
+    )
+    assert result.answer == "fresh"
+
+
+def test_forced_finish_variable_tool_call_and_code_text() -> None:
+    result, _ = _run(
+        [tool_turn(py("result = 'kept'")), tool_turn(call("final_answer", variable="result"))],
+        cfg=_cfg(max_iterations=1),
+    )
+    assert result.answer == "kept"
+    result, _ = _run(
+        [tool_turn(py("x = 1")), "```python\nprint(x)\n```"], cfg=_cfg(max_iterations=1)
+    )
+    assert result.answer == ""
+
+
+def test_forced_finish_on_timeout_in_tools_mode() -> None:
+    lm = MockLM(
+        [
+            tool_turn(py("import time\nresult = 'stale'\ntime.sleep(0.5)")),
+            tool_turn(call("final_answer", answer="fresh")),
+        ]
+    )
+    result = RLM(_cfg(max_timeout=0.3), lm).completion(CONTEXT, "?")
+    assert (result.answer, result.stop_reason) == ("fresh", "timeout")
+    forced = lm.root_calls[1]
+    assert forced["tools"] is not None and forced["retry"] is False
+    assert_valid_history(forced["messages"])
 
 
 def test_forced_finish_asks_for_final_answer_tool() -> None:
@@ -304,10 +351,9 @@ def test_forced_finish_asks_for_final_answer_tool() -> None:
     assert (result.answer, result.stop_reason) == ("42", "max_iterations")
     forced = lm.root_calls[1]
     assert forced["tools"] is not None
-    assert forced["messages"][-1] == {
-        "role": "user",
-        "content": forced_final_prompt("turns", "tools"),
-    }
+    # The forced prompt now leads with the REPL state (here only the last output).
+    assert forced["messages"][-1]["role"] == "user"
+    assert forced["messages"][-1]["content"].endswith(forced_final_prompt("turns", "tools"))
     assert_valid_history(forced["messages"])
 
 
