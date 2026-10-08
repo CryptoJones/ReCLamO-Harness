@@ -36,6 +36,10 @@ BASE_URL_ENV = "RECLAMO_BASE_URL"
 MODEL_ENV = "RECLAMO_MODEL"
 DEFAULT_USER_PROFILES = Path("~/.config/reclamo/profiles.toml")
 PROTOCOLS = ("fence", "tools")
+# "reclamo" is our own prompt and turn format; "upstream-rlm-v0" reproduces the
+# alexzhang13/rlm v1.0.0 scaffold that mit-oasys/rlm-qwen3-8b-v0.1 was trained on
+# (issue #43, see upstream.py).
+PLANNER_STYLES = ("reclamo", "upstream-rlm-v0")
 
 # Qwen3 sampling presets from the model card; top_k and min_p are non-standard
 # parameters and travel to the server in the request body's top level via
@@ -150,6 +154,7 @@ class RLMConfig:
     retry_backoff: float = 1.0  # seconds; doubles each retry
     sft_log: bool = False  # also write sft.jsonl (one line per root turn)
     protocol: str = "fence"  # "fence" (```repl + FINAL) | "tools" (execute_python/final_answer)
+    planner_style: str = "reclamo"  # root prompt/turn format; see PLANNER_STYLES
     root: ModelConfig
     sub: ModelConfig
 
@@ -157,6 +162,16 @@ class RLMConfig:
         if self.protocol not in PROTOCOLS:
             raise ConfigError(
                 f"protocol must be one of {', '.join(PROTOCOLS)}, not {self.protocol!r}"
+            )
+        if self.planner_style not in PLANNER_STYLES:
+            raise ConfigError(
+                f"planner_style must be one of {', '.join(PLANNER_STYLES)}, "
+                f"not {self.planner_style!r}"
+            )
+        if self.planner_style != "reclamo" and self.protocol != "fence":
+            raise ConfigError(
+                f"planner_style {self.planner_style!r} speaks fenced ```repl code and "
+                f'FINAL text; it needs protocol = "fence", not {self.protocol!r}'
             )
         self.endpoints()  # validates that roles sharing a base_url agree
 

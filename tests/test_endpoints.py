@@ -347,3 +347,17 @@ def test_readme_planner_8b_example_parses(tmp_path: Path) -> None:
     assert (sub.base_url, cfg.sub.model) == ("http://pluto:8083/v1", "qwen3.8-flash-next")
     assert (sub.api_key_cmd, sub.concurrency) == ("pass pluto/flashnext-api-key", 1)
     assert "planner-8b" not in BUILTIN_PROFILES_TOML  # documented, not built in
+
+
+def test_readme_rlm_qwen3_8b_example_parses(tmp_path: Path) -> None:
+    readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
+    block = next(b for b in readme.split("```toml\n")[1:] if "[profiles.rlm-qwen3-8b]" in b)
+    profiles = _write_profiles(tmp_path, block.split("```")[0])
+    cfg = load_config("rlm-qwen3-8b", profiles, env=NO_ENV)
+    assert cfg.planner_style == "upstream-rlm-v0" and cfg.protocol == "fence"
+    assert cfg.output_truncate_chars == 20_000
+    root, sub = cfg.endpoint("root"), cfg.endpoint("sub")
+    assert (root.base_url, cfg.root.enable_thinking) == ("http://localhost:8080/v1", False)
+    assert cfg.root.sampling == {"temperature": 0.7, "top_p": 0.8, "top_k": 20, "min_p": 0.0}
+    assert (sub.base_url, cfg.sub.model) == ("http://pluto:8083/v1", "qwen3.8-flash-next")
+    assert "rlm-qwen3-8b" not in BUILTIN_PROFILES_TOML

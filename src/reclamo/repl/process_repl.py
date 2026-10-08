@@ -108,6 +108,7 @@ class ProcessREPL(REPL):
                 "context_kind": self._context_kind,
                 "truncate": self.cfg.output_truncate_chars,
                 "max_subcalls_per_exec": self.cfg.max_subcalls_per_exec,
+                "answer_dict": getattr(self.cfg, "planner_style", "reclamo") == "reclamo",
             }
         )
         init = self._recv(deadline)

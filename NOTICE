@@ -13,4 +13,11 @@ The design of this software is derived from two MIT-licensed projects:
 ReCLamO-Harness is a clean-room implementation that follows their design. No files
 from either project are copied into this repository. Should any snippet ever be ported
 verbatim, it keeps the upstream copyright line and MIT permission notice alongside it.
+
+One module does carry verbatim text: src/reclamo/upstream.py holds the system prompt,
+per-turn prompts and output layout of alexzhang13/rlm at tag v1.0.0 (commit 18a9368),
+with the Qwen3-8B edits from the RLM paper (arXiv 2512.24601, App. C.1), so that the
+authors' released mit-oasys/rlm-qwen3-8b-v0.1 checkpoint (MIT) can be used as the
+planner. Those strings keep the copyright line of that tag's LICENSE,
+"Copyright (c) 2025 Alex Zhang", and the MIT permission notice beside them.
 The full MIT license texts are reproduced in THIRD_PARTY_LICENSES.md.

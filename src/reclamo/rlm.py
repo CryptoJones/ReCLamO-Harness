@@ -37,6 +37,13 @@ history stays append-only and valid for the chat template. A text reply with
 no tool call gets a nudge; a fenced block or a ``FINAL(...)`` in the text is
 honoured once as a courtesy and counted as a protocol slip. Every guard that
 applies to the fence protocol applies here too.
+
+``planner_style="upstream-rlm-v0"`` (issue #43) keeps the fence loop but swaps
+our prompt and turn layout for the alexzhang13/rlm v1.0.0 scaffold that
+RLM-Qwen3-8B was trained on (``upstream.py``): context metadata as an assistant
+message, one "Code executed / REPL output" user message per block, and the query
+in a per-turn user prompt that is sent but not stored. Our nudges follow the
+outputs as a separate user message.
 """
 
 from __future__ import annotations
@@ -78,6 +85,9 @@ from reclamo.prompts import (
 )
 from reclamo.repl import make_repl
 from reclamo.repl.base import REPL, ExecResult, LLMHandler
+from reclamo.upstream import code_output_message as upstream_code_output
+from reclamo.upstream import initial_messages as upstream_initial_messages
+from reclamo.upstream import user_prompt as upstream_user_prompt
 
 
 class LMLike(Protocol):
@@ -248,6 +258,8 @@ class RLM:
         self._full_history: list[dict[str, Any]] = []
         self._stats = _new_stats()
         self._last_output: str | None = None
+        self._context: Any = None
+        self._query = ""
 
     # --- public -----------------------------------------------------------
 
@@ -262,6 +274,8 @@ class RLM:
                 started=started,
             )
         kind, meta = describe_context(context)
+        self._context = context
+        self._query = query
         self._context_chars = meta.total_chars
         self.logger.metadata(
             depth=self.depth,
@@ -287,11 +301,21 @@ class RLM:
             return self._run_tools(repl, query, meta, started)
         cfg = self.cfg
         n = cfg.max_iterations
-        history: list[dict[str, str]] = [
-            {"role": "system", "content": build_system_prompt(cfg, meta)},
-            {"role": "user", "content": f"{query}\n\n{turn_prompt(1, n, first=True)}"},
-        ]
-        kinds = ["system", "query"]  # parallel to history; "repl" marks REPL-output turns
+        # upstream-rlm-v0 (#43): the alexzhang13/rlm v1.0.0 message layout. The query
+        # rides in a per-turn user prompt that is sent but never stored, each executed
+        # block gets its own "Code executed: ... REPL output: ..." user message, and
+        # there is no "Turn i/N" line. Every guard below still applies.
+        upstream = cfg.planner_style == "upstream-rlm-v0"
+        history: list[dict[str, Any]]
+        if upstream:
+            history = upstream_initial_messages(self._context)
+            kinds = ["system", "meta"]
+        else:
+            history = [
+                {"role": "system", "content": build_system_prompt(cfg, meta)},
+                {"role": "user", "content": f"{query}\n\n{turn_prompt(1, n, first=True)}"},
+            ]
+            kinds = ["system", "query"]  # parallel to history; "repl" marks REPL-output turns
         self._full_history = list(history)
 
         prev_code_hash: str | None = None
@@ -320,10 +344,13 @@ class RLM:
             self._turn_max_prompt = 0
             messages_in = len(history)
 
-            completion, notes = self._root_call(history)
+            sent = history
+            if upstream:
+                sent = [*history, {"role": "user", "content": upstream_user_prompt(query, i - 1)}]
+            completion, notes = self._root_call(sent)
             content = completion.content
             if self.logger.sft_path:
-                self.logger.sft(list(history), content, depth=self.depth, turn=i)
+                self.logger.sft(list(sent), content, depth=self.depth, turn=i)
             self._append(history, kinds, {"role": "assistant", "content": content}, "assistant")
             self.printer.response(self.depth, i, n, content)
 
@@ -358,6 +385,11 @@ class RLM:
                     )
 
             cand = find_final(content)
+            if upstream and cand is not None and cand.kind == "FINAL_VAR" and cand.has_code:
+                # Upstream runs the turn's code first and then reads FINAL_VAR, so the
+                # checkpoint may name a variable its own block just set. The block has
+                # run by now; a FINAL(text) next to code is still rejected.
+                cand = dataclasses.replace(cand, has_code=False)
             decision: dict[str, Any] | None = None
             if cand is not None:
                 accepted, value, reason, stop = self._judge_final(
@@ -381,9 +413,14 @@ class RLM:
 
             # Compose the next user message: outputs, then notes, then the turn line.
             parts: list[str] = []
-            for k, res in enumerate(results, 1):
-                header = f"[block {k} output]" if len(results) > 1 else "[output]"
-                parts.append(f"{header}\n{res.output or '(no output)'}")
+            if upstream:
+                for block, res in zip(blocks, results, strict=True):
+                    msg = upstream_code_output(block, res, cfg.output_truncate_chars)
+                    self._append(history, kinds, {"role": "user", "content": msg}, "repl")
+            else:
+                for k, res in enumerate(results, 1):
+                    header = f"[block {k} output]" if len(results) > 1 else "[output]"
+                    parts.append(f"{header}\n{res.output or '(no output)'}")
 
             if blocks:
                 code_hash = hashlib.sha256(
@@ -409,9 +446,15 @@ class RLM:
                 self.printer.note(note)
 
             parts.extend(notes)
-            if i < n:
-                parts.append(turn_prompt(i + 1, n))
-            self._append(history, kinds, {"role": "user", "content": "\n\n".join(parts)}, "repl")
+            if upstream:
+                if parts:  # our nudges, as their own user message after the outputs
+                    msg = {"role": "user", "content": "\n\n".join(parts)}
+                    self._append(history, kinds, msg, "note")
+            else:
+                if i < n:
+                    parts.append(turn_prompt(i + 1, n))
+                msg = {"role": "user", "content": "\n\n".join(parts)}
+                self._append(history, kinds, msg, "repl")
             self._log_iteration(i, messages_in, completion, blocks, results, notes, decision)
 
         return self._forced_finish(history, repl, answer_state, iterations, started)
@@ -840,6 +883,9 @@ class RLM:
         state = forced_final_state(shown, self._last_output)
         if state:
             prompt = f"{state}\n\n{prompt}"
+        if self.cfg.planner_style == "upstream-rlm-v0":
+            # That style never stores the query (it rides in the per-turn prompt).
+            prompt = f'The original prompt: "{self._query}".\n\n{prompt}'
         if history and history[-1]["role"] == "user":
             history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
         else:

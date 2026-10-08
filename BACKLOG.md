@@ -8,6 +8,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 ### Epic: Trained small planner — Qwen3-8B LoRA as the RLM root, Flash-Next as the reader ([#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42))
 
 - [ ] Per-role endpoints: small planner (root) + Flash-Next reader (sub-calls) ([#36](https://github.com/CryptoJones/ReCLamO-Harness/issues/36))
+- [ ] Compatibility mode for mit-oasys/rlm-qwen3-8b-v0.1 as planner (upstream rlm scaffold/prompt) ([#43](https://github.com/CryptoJones/ReCLamO-Harness/issues/43))
 - [ ] Practice task suite (never the exam): diverse long-context generators for training data ([#37](https://github.com/CryptoJones/ReCLamO-Harness/issues/37))
 - [ ] Teacher trajectories: collect and filter correct RLM runs into an SFT dataset ([#38](https://github.com/CryptoJones/ReCLamO-Harness/issues/38))
 - [ ] LoRA SFT of Qwen3-8B on RunPod ([#39](https://github.com/CryptoJones/ReCLamO-Harness/issues/39))
