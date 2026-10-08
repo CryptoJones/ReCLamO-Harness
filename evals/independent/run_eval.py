@@ -8,13 +8,17 @@ written by other models.
     uv run python evals/independent/run_eval.py --dry-run         # sizes and fit decisions
 
 The tasks are the eight generators in ``fixed/active/``, each scored by **its own**
-``score()``; nothing here writes questions or scores answers. The two modes are the ones
+``score()``; nothing here writes questions or scores answers. The modes are the ones
 ``examples/bench.py`` defines, imported rather than copied:
 
 - ``rlm``: the harness through the library API (``bench.run_rlm``).
-- ``plain``: the whole context in one prompt, best of thinking on (16K output cap,
-  capped by what fits) and thinking off, or ``does not fit`` without a call when the
-  prompt exceeds the usable window (``bench.run_plain`` / ``bench.fit_decision``).
+- ``plain``: the whole context in one prompt, one call with thinking as the profile's
+  root role sets it (16K output cap, capped by what fits), or ``does not fit`` without a
+  call when the prompt exceeds the usable window (``bench.run_plain`` /
+  ``bench.fit_decision``).
+- ``plain-think`` / ``plain-nothink`` (opt-in): the same single call with thinking forced
+  on / off, each its own row. Nothing chooses between attempts using the answer key
+  (issue #57); rows written before that are best-of-2 and load per ``--legacy-plain``.
 
 Every row is written as soon as it finishes; ``--resume FILE`` skips rows already present
 with the same task, size, mode and seed (bench.py's semantics). A markdown summary is
@@ -62,7 +66,9 @@ LANES = (
     "Multivac",
 )
 SIZES = ("small", "medium", "large")
-MODES = ("rlm", "plain")
+MODES = ("rlm", "plain", "plain-think", "plain-nothink")
+DEFAULT_MODES = ("rlm", "plain")
+PLAIN_MODES = ("plain", "plain-think", "plain-nothink")
 DEFAULT_MAX_TIMEOUT = 900.0
 RowRunner = Callable[[str, str, str, int], dict[str, Any]]
 
@@ -190,7 +196,14 @@ def run_row(
         row.update(bench.run_rlm(cfg, client, inst, log_dir))
     else:
         row.update(
-            bench.run_plain(cfg, client, inst, truncated=False, plain_max_tokens=plain_max_tokens)
+            bench.run_plain(
+                cfg,
+                client,
+                inst,
+                truncated=False,
+                plain_max_tokens=plain_max_tokens,
+                enable_thinking=bench.PLAIN_THINKING[mode],
+            )
         )
     return finish_row(row)
 
@@ -277,9 +290,14 @@ def describe_row(row: dict[str, Any]) -> str:
     return ", ".join(bits)
 
 
-def load_rows(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def load_rows(
+    path: Path, legacy: str = "best-of-2"
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Rows from a JSON file; pre-#57 best-of-2 plain rows are summarised per ``legacy``."""
     data = json.loads(path.read_text(encoding="utf-8"))
-    rows = [finish_row(bench.apply_choice(r, "accuracy")) for r in data.get("rows", [])]
+    rows = [
+        finish_row(bench.apply_legacy(r, "accuracy", legacy=legacy)) for r in data.get("rows", [])
+    ]
     return data.get("meta", {}), rows
 
 
@@ -364,25 +382,29 @@ def format_summary(rows: list[dict[str, Any]], manifest: dict[str, Any] | None =
     lanes, sizes = _order(rows)
     groups = _groups(rows)
     seeds = sorted({int(r["seed"]) for r in rows})
+    present = {m for (_l, _s, m) in groups}
+    plain_cols = [m for m in PLAIN_MODES if m in present] or ["plain"]
     out = [
         f"Seeds: {', '.join(map(str, seeds))}. Scores are each generator's own `score()` "
         "(1.0 = exact); multi-seed cells show the mean.",
         "",
-        "| Task (author model) | Size | rlm score | plain | rlm turns | rlm sub-calls | "
-        "rlm s | rlm stop |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Task (author model) | Size | rlm score | "
+        + " | ".join(plain_cols)
+        + " | rlm turns | rlm sub-calls | rlm s | rlm stop |",
+        "|---|---|---|" + "---|" * len(plain_cols) + "---|---|---|---|",
     ]
     for lane in lanes:
         model = gens.get(lane, {}).get("model")
         name = f"{lane} ({model})" if model else lane
         for size in sizes:
             rlm = groups.get((lane, size, "rlm"), [])
-            plain = groups.get((lane, size, "plain"), [])
-            if not rlm and not plain:
+            plains = [groups.get((lane, size, m), []) for m in plain_cols]
+            if not rlm and not any(plains):
                 continue
-            rc, pc = cell_stats(rlm), cell_stats(plain)
+            rc = cell_stats(rlm)
+            plain_text = " | ".join(_score_text(cell_stats(g)) for g in plains)
             out.append(
-                f"| {name} | {size} | {_score_text(rc)} | {_score_text(pc)} | "
+                f"| {name} | {size} | {_score_text(rc)} | {plain_text} | "
                 f"{_num(rc['median_turns'])} | {_num(rc['median_subcalls'])} | "
                 f"{_num(rc['median_seconds'])} | {', '.join(rc['stop_reasons']) or '–'} |"
             )
@@ -393,7 +415,7 @@ def format_summary(rows: list[dict[str, Any]], manifest: dict[str, Any] | None =
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for size in sizes:
-        for mode in ("rlm", "rlm:tools", "plain"):
+        for mode in ("rlm", "rlm:tools", *PLAIN_MODES):
             group = [r for (_l, s, m), g in groups.items() if s == size and m == mode for r in g]
             if not group:
                 continue
@@ -404,6 +426,9 @@ def format_summary(rows: list[dict[str, Any]], manifest: dict[str, Any] | None =
                 f"{c['exact']}/{c['n']} | {c['does_not_fit']} | {c['errors']} | "
                 f"{_num(c['median_seconds'])} |"
             )
+    note = bench.legacy_note(rows)
+    if note:
+        out += ["", note]
     return "\n".join(out)
 
 
@@ -418,9 +443,9 @@ def format_dry_run(
             fits, est, _ = bench.fit_decision(cfg, inst.context, inst.query)
             seen[(lane, size, seed)] = (len(inst.context), fits, est)
         chars, fits, est = seen[(lane, size, seed)]
-        verdict = ("fits" if fits else "does not fit") if mode == "plain" else ""
+        verdict = ("fits" if fits else "does not fit") if mode in PLAIN_MODES else ""
         lines.append(
-            f"{lane:17} {size:7} {mode:6} seed={seed}  {chars:>10,} chars ~{est:>7,} tokens  "
+            f"{lane:17} {size:7} {mode:13} seed={seed}  {chars:>10,} chars ~{est:>7,} tokens  "
             f"{verdict}"
         )
     return "\n".join(lines)
@@ -467,11 +492,22 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profiles", default=None, metavar="FILE")
     parser.add_argument("--tasks", default=",".join(LANES), help="comma-separated lanes")
     parser.add_argument("--sizes", default=",".join(SIZES), help="comma-separated sizes")
-    parser.add_argument("--modes", default=",".join(MODES), help="comma-separated modes")
+    parser.add_argument(
+        "--modes",
+        default=",".join(DEFAULT_MODES),
+        help=f"comma-separated subset of {', '.join(MODES)} (default: %(default)s)",
+    )
     parser.add_argument("--seed-list", default="0", help="comma-separated seeds (default 0)")
     parser.add_argument("--out", default=None, metavar="FILE", help="JSON rows (default runs/)")
     parser.add_argument("--resume", default=None, metavar="FILE", help="continue this JSON")
     parser.add_argument("--summary-only", default=None, metavar="FILE", help="summarise; no runs")
+    parser.add_argument(
+        "--legacy-plain",
+        choices=bench.LEGACY_PLAIN,
+        default="best-of-2",
+        help="how plain rows written before issue #57 (best of thinking on/off, chosen on "
+        "the truth) are summarised: as recorded (default) or as one single variant",
+    )
     parser.add_argument("--log-dir", default="runs", help="trajectory directory (default runs/)")
     parser.add_argument(
         "--max-timeout",
@@ -495,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     manifest = load_manifest()
 
     if args.summary_only:
-        _meta, rows = load_rows(Path(args.summary_only))
+        _meta, rows = load_rows(Path(args.summary_only), args.legacy_plain)
         print(format_summary(rows, manifest))
         return 0
 
@@ -536,7 +572,16 @@ def main(argv: list[str] | None = None) -> int:
     rows: list[dict[str, Any]] = []
     meta: dict[str, Any] = {}
     if args.resume:
-        meta, rows = load_rows(Path(args.resume))
+        meta, rows = load_rows(Path(args.resume), args.legacy_plain)
+        conflict = bench.legacy_resume_conflict(rows, modes)
+        if conflict:
+            print(
+                f"run_eval: {args.resume} holds best-of-2 {', '.join(conflict)} rows from "
+                "before issue #57; resuming would skip those cells. Write the new rows to a "
+                "new file, or drop those modes.",
+                file=err,
+            )
+            return 2
     out = Path(args.out or args.resume or Path(args.log_dir) / f"independent-{stamp}.json")
     meta = {
         **meta,
@@ -553,7 +598,8 @@ def main(argv: list[str] | None = None) -> int:
         "subcall_chars": cfg.subcall_chars,
         "root_max_tokens": cfg.root.max_tokens,
         "plain_max_tokens": args.plain_max_tokens,
-        "plain_rule": "bench.run_plain: best of thinking-on and thinking-off single calls",
+        "plain_rule": f"bench.run_plain: {bench.PLAIN_RULE}",
+        "root_enable_thinking": cfg.root.enable_thinking,
         "token_estimate": "bench.estimate_tokens: one token per digit, else chars/3.5",
         "active_sha256": {lane: manifest["generators"][lane]["active"]["sha256"] for lane in LANES},
         "created": meta.get("created", stamp),

@@ -68,14 +68,52 @@ def test_rlm_row_uses_the_generator_scorer_and_records_counters(tmp_path: Path) 
     assert row["protocol"] == "fence" and row["truth"] == "Room 7"
 
 
-def test_plain_row_is_bench_best_of_two() -> None:
+def test_plain_row_is_one_attempt_with_the_root_thinking() -> None:
     cfg = make_config("http://x")
     lm = MockLM(root=["no idea", "It is in Room 7."])
     row = run_eval.run_row(cfg, lm, gens_with(fake_generator()), "Fake", "small", "plain", 0, None)
     assert row["fits"] and not row["does_not_fit"]
-    assert row["score"] == 1.0 and row["exact"] and row["chosen"] == "nothink"
-    assert [c["enable_thinking"] for c in lm.root_calls] == [True, False]
+    assert row["score"] == 0.0 and not row["exact"] and "chosen" not in row
+    assert [c["enable_thinking"] for c in lm.root_calls] == [True]
     assert lm.root_calls[0]["messages"][1]["content"].startswith("=== DOCUMENT ===")
+
+
+@pytest.mark.parametrize("mode, thinking", [("plain-think", True), ("plain-nothink", False)])
+def test_named_plain_modes(mode: str, thinking: bool) -> None:
+    cfg = make_config("http://x")
+    lm = MockLM(root=["It is in Room 7."])
+    row = run_eval.run_row(cfg, lm, gens_with(fake_generator()), "Fake", "small", mode, 0, None)
+    assert row["mode"] == mode and row["exact"]
+    assert [c["enable_thinking"] for c in lm.root_calls] == [thinking]
+
+
+def test_summary_shows_each_plain_mode_as_its_own_column() -> None:
+    rows = [
+        _fake_row("GLaDOS", "small", "rlm", 0, 1.0),
+        _fake_row("GLaDOS", "small", "plain", 0, 0.5),
+        _fake_row("GLaDOS", "small", "plain-nothink", 0, 0.25),
+    ]
+    text = run_eval.format_summary(rows, run_eval.load_manifest())
+    assert "| rlm score | plain | plain-nothink | rlm turns |" in text
+    assert "| GLaDOS (grok-4.6) | small | 1.00 (exact) | 0.50 | 0.25 |" in text
+    assert "| small | plain-nothink | 1 | 0.25 |" in text
+
+
+def test_summary_only_on_an_old_best_of_two_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    row = _fake_row("Cerebex", "small", "plain", 0, 1.0)
+    row["variants"] = {
+        "thinking": {"score": 0.0, "seconds": 5.0, "stop_reason": "stop"},
+        "nothink": {"score": 1.0, "seconds": 9.0, "stop_reason": "stop"},
+    }
+    out = tmp_path / "rows.json"
+    run_eval.write_rows(out, {}, [row])
+    assert run_eval.main(["--summary-only", str(out)]) == 0
+    text = capsys.readouterr().out
+    assert "| Cerebex (glm-5.3-flash) | small | – | 1.00 (exact) |" in text and "predate" in text
+    assert run_eval.main(["--summary-only", str(out), "--legacy-plain", "thinking"]) == 0
+    assert "| Cerebex (glm-5.3-flash) | small | – | 0.00 |" in capsys.readouterr().out
 
 
 def test_plain_row_does_not_fit_makes_no_call() -> None:

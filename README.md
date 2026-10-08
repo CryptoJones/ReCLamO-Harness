@@ -372,6 +372,18 @@ The smoke, benchmark, protocol and depth-2 results after it use tasks written by
 same Claude models that wrote the harness and its prompt, so they likely overstate
 what the harness can do.
 
+> **Correction (issue [#57](https://github.com/CryptoJones/ReCLamO-Harness/issues/57)).**
+> Every plain number published in this README before #57 is **best-of-2 selected on
+> the answer key**: each plain row made two calls (thinking on, thinking off), scored
+> both against the truth and kept the better one, while the harness got one attempt.
+> That inflates plain. On the #22 re-run's 16 small cells, plain was exact on 12 as
+> best-of-2, but on 9 with thinking on alone (the pluto root setting) and on 8 with
+> thinking off alone. The tables below keep the numbers as they were measured. Since
+> #57, `plain` is one call with thinking as the profile's root role sets it (the same
+> model configuration as the harness's root), and `plain-think` / `plain-nothink` are
+> explicit single-call modes, each its own row. `--summary-only FILE --legacy-plain
+> thinking` (or `nothink`) re-summarises an old row file as one variant.
+
 ### Independent evaluation (tasks written by other models)
 
 [#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22). The tasks are the eight
@@ -393,9 +405,10 @@ served by Strata on pluto. The runner is
 `bench.py`'s two modes:
 
 - **rlm** is the harness.
-- **plain** is one call with the whole context in the prompt, the better of thinking on
-  (16K output cap) and thinking off. It is recorded as "does not fit" when the prompt
-  is larger than pluto's 28,672 usable tokens.
+- **plain** is one call with the whole context in the prompt. In this run (before
+  #57) it was the better of thinking on (16K output cap) and thinking off, chosen
+  against the answer key; see the correction above. It is recorded as "does not fit"
+  when the prompt is larger than pluto's 28,672 usable tokens.
 
 The grid was 8 tasks × small (~60K chars), medium (~300K) and large (~1.2M), with seed
 0 for every cell and seed 1 for small and medium: 80 rows and no errors. Raw rows are in
@@ -658,8 +671,10 @@ Findings:
   never had code to strip. The fixes are therefore untested by this run rather than shown
   to help. No answer contained a code block.
 - **Below the window, plain still wins clearly.** At ~60K characters, plain was exact on
-  12 of 16 cells and rlm on 6. Plain took a median 69 s for the chosen call (167 s for
-  both variants), against 175 s for rlm. TheDixieFlatline is now answerable, and it shows
+  12 of 16 cells and rlm on 6. That 12 is best-of-2 on the answer key; as a single
+  attempt plain was exact on 9 (thinking on) or 8 (thinking off), still ahead of rlm.
+  Plain took a median 69 s for the chosen call (167 s for both variants), against 175 s
+  for rlm. TheDixieFlatline is now answerable, and it shows
   the gap: plain was exact on both seeds, and rlm was wrong on both. On small seed 0,
   rlm traced the renames correctly. It then took an Auditor's "going to be moved to Room
   112 tomorrow" as the final location (`runs/20261008T044627Z-6d2fa3.jsonl`).
@@ -767,14 +782,19 @@ as above. Raw rows: `runs/bench-20261007T094811Z.json` (not in git).
 What each mode means:
 
 - **rlm** is the harness.
-- **plain** is one chat call with the whole context in the prompt.
+- **plain** is one chat call with the whole context in the prompt. Since #57 it is one
+  attempt with thinking as the root role sets it; `plain-think` and `plain-nothink`
+  force thinking on or off, each as its own row.
 - **does not fit** means the plain prompt would not fit pluto's usable window, so the
   plain model cannot attempt the task. The usable window is 28,672 tokens: 32K resident
   KV minus an output reserve.
 
 The token estimate counts one token per digit and 3.5 characters per token otherwise.
-Each plain run is the better of two variants, so the baseline is not penalised by a
-cut-off: thinking on with a 16K output cap, and thinking off.
+The plain rows in this table predate #57: each was the better of two variants,
+thinking on with a 16K output cap and thinking off, **chosen against the answer key**.
+That is an oracle the harness did not get, so these plain results are an upper bound
+(see the correction at the top of Results). The 16K output cap stays; the selection
+is gone.
 
 | Task | Size | Mode | Result over 3 seeds | Median s | Median sub-calls |
 |---|---|---|---|---|---|
@@ -811,8 +831,10 @@ Findings:
   small instead of thinking over the whole document in one call. The exception is the
   tiny needle, where plain answers in under a second.
 - **The first plain baseline was unfair.** Two of its three 100-ticket failures were
-  cut-offs: thinking ran into the output limit. The best-of-two rule above replaced it.
-  With the rule in place, plain is 3/3.
+  cut-offs: thinking ran into the output limit. A best-of-two rule replaced it, and
+  plain went to 3/3, but that rule picked the variant using the answer key and is
+  itself unfair in plain's favour. Since #57 the cut-off is handled by the generous
+  output cap alone, with one attempt.
 - **Sub-calls stayed small.** 0 to 16 per run. 16 was at 1,000 tickets, still about 60
   tickets per call rather than one per ticket.
 - **The one miss** was oolong_lite at 1,000 tickets, seed 2, total error 34. The other
