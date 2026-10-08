@@ -156,8 +156,12 @@ class LMClient:
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
     ) -> dict[str, Any]:
-        """Return the kwargs for ``chat.completions.create`` (exposed for tests)."""
+        """Return the kwargs for ``chat.completions.create`` (exposed for tests).
+
+        ``timeout`` overrides the role's per-request timeout for this one call.
+        """
         mc: ModelConfig = self.cfg.role(role)
         thinking = mc.enable_thinking if enable_thinking is None else enable_thinking
 
@@ -166,7 +170,7 @@ class LMClient:
             "model": mc.model,
             "messages": [dict(m) for m in messages],
             "max_tokens": max_tokens or mc.max_tokens,
-            "timeout": mc.timeout,
+            "timeout": mc.timeout if timeout is None else timeout,
         }
         for key, value in mc.sampling.items():
             if key in _STANDARD_SAMPLING:
@@ -192,13 +196,21 @@ class LMClient:
         enable_thinking: bool | None = None,
         max_tokens: int | None = None,
         tools: list[dict[str, Any]] | None = None,
+        timeout: float | None = None,
+        retry: bool = True,
     ) -> Completion:
+        """One chat completion. ``retry=False`` makes exactly one attempt (no backoff)."""
         kwargs = self.build_request(
-            messages, role, enable_thinking=enable_thinking, max_tokens=max_tokens, tools=tools
+            messages,
+            role,
+            enable_thinking=enable_thinking,
+            max_tokens=max_tokens,
+            tools=tools,
+            timeout=timeout,
         )
         started = time.monotonic()
         with self._sem:
-            response, attempts = self._call_with_retry(kwargs)
+            response, attempts = self._call_with_retry(kwargs, retry)
         latency = time.monotonic() - started
         completion = self._parse(response, role=role, latency=latency, attempts=attempts)
         with self._lock:
@@ -216,14 +228,14 @@ class LMClient:
 
     # --- internals --------------------------------------------------------
 
-    def _call_with_retry(self, kwargs: dict[str, Any]) -> tuple[Any, int]:
+    def _call_with_retry(self, kwargs: dict[str, Any], retry: bool = True) -> tuple[Any, int]:
         attempts = 0
         while True:
             attempts += 1
             try:
                 return self._client.chat.completions.create(**kwargs), attempts
             except openai.APIError as exc:
-                if not _retryable(exc) or attempts > self.cfg.max_retries:
+                if not retry or not _retryable(exc) or attempts > self.cfg.max_retries:
                     raise
                 self._sleep(self.cfg.retry_backoff * 2 ** (attempts - 1))
 

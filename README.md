@@ -64,7 +64,9 @@ thinking request, and reports latency, token usage and whether reasoning came ba
 | `--protocol {fence,tools}` | how the root model acts: fenced code + `FINAL` text (default), or `execute_python` / `final_answer` tool calls (see *Protocol* under Results) |
 
 Exit codes: `0` an answer was produced (including a forced finish when turns or time
-run out: whatever the REPL already holds, else one last "out of time" call), `3` a
+run out: one last call that shows the model what the REPL holds and asks for `FINAL` /
+`FINAL_VAR`, falling back to the answer dict, then an answer variable, then the reply's
+prose with code removed), `3` a
 limit stopped the run (consecutive REPL errors, token budget; any partial answer is
 printed), `2` configuration or key errors, `1` the endpoint failed.
 
@@ -124,7 +126,10 @@ Every run writes `runs/<UTC timestamp>-<id>.jsonl`, one JSON object per line:
 - `subcall` — depth, kind (`llm_query`, `llm_query_batched`, `rlm_query`), prompt and
   answer sizes, latency, running count
 - `compaction` — when older REPL outputs were elided from the history
-- `forced_finish` and `final` — how the run ended
+- `forced_finish` and `final` — how the run ended. `forced_finish.source` says where a
+  forced answer came from: `model` (a valid `FINAL` / `FINAL_VAR` / `final_answer` in
+  the forced reply), `answer_dict`, `variable` (with its name), `reply_text` (the
+  reply's prose, code and thinking removed) or `empty`
 
 Reasoning is logged but never fed back into the history, per Qwen's guidance. With
 `--sft` a second file, `<same stem>.sft.jsonl`, holds one line per root turn,
@@ -319,8 +324,9 @@ Findings:
   This run got 0.28 and 2/8 exact again, on the same two tasks. That run looked only at
   protocol and changed nothing; the harness is unchanged since.
 
-Harness bugs found. They are recorded here and **not fixed in this PR**, and no row was
-re-run:
+Harness bugs found. Both were **fixed after this run**, in the forced-finish PR that
+followed it ([#22](https://github.com/CryptoJones/ReCLamO-Harness/issues/22)). The
+numbers above are still the ones measured on frozen `e17580f`, and no row was re-run:
 
 1. **The forced finish can return a stale REPL variable instead of the answer.** When a
    run runs out of turns, `_forced_finish` returns the first variable it finds named
@@ -329,12 +335,23 @@ re-run:
    (`runs/20261007T220642Z-c69a18.jsonl`), turn 20 printed `Final answer: $91049.09`,
    which is exactly right. The run instead returned `result`, set on turn 18 to an
    `llm_query` reply (a prose chain analysis), and scored 0. `result` is a common name
-   for a sub-call's reply, so this can recur.
+   for a sub-call's reply, so this can recur. **Fixed:** the forced finish now always
+   makes one more call. That call's prompt shows the current value of `answer['content']`
+   and of each of those variables (300 characters each) plus the end of the last REPL
+   output, and asks for `FINAL(...)` or `FINAL_VAR(name)`. A valid reply wins. The
+   variables are only a fallback, after the answer dict, so a good value already in the
+   REPL is still kept (paper E.2) but no longer beats an answer the model just printed.
 2. **The forced finish can return code as the answer.** When the model's forced-finish
    reply has no `FINAL(...)`, the whole reply becomes the answer. Twice that reply was a
    ```` ```repl ```` block, and the code was scored as the answer: SHODAN large seed 0
    (`runs/20261007T215541Z-947e9c.jsonl`) and SHODAN small seed 1
-   (`runs/20261007T223915Z-dd5502.jsonl`).
+   (`runs/20261007T223915Z-dd5502.jsonl`). **Fixed:** when the forced reply has no
+   usable final, the fallbacks are the answer dict, then an answer variable, then the
+   reply's prose with every code block and `<think>` block removed (dropped if it reads
+   like a plan or only introduces code), then an empty answer. A code block is never
+   returned. The same logic covers a root timeout, where the call is bounded to one
+   attempt with thinking off and a 60 s request timeout, and `protocol="tools"`, where a
+   `final_answer` call or `FINAL` text is accepted.
 
 Defects in the tasks. The generators were left unchanged, so these rows are scored as
 the generators score them. The "answerable" columns above leave out the † cells.
@@ -364,7 +381,7 @@ Above the window, it is the only way to get an answer at all, but it gets one on
 about half of the answerable medium cells and a fifth of the large ones. Its answers
 are reliable on tasks that a few greps can solve, and weak on multi-document
 reconciliation. The clear levers are the turn budget and getting Qwen to delegate
-reading to `llm_query`, plus the two forced-finish bugs. Any change to those must be
+reading to `llm_query`, plus the two forced-finish bugs (since fixed). Any change to those must be
 measured on a fresh seed or new tasks, not on these rows.
 
 ### Smoke run (self-authored tasks)

@@ -21,7 +21,11 @@ the REPL; then a ``FINAL`` / ``FINAL_VAR`` candidate in the prose (rejected,
 with a corrective message, when it sits next to unexecuted code, names a
 missing variable, or reads like a plan the first time it is seen). When turns
 run out the loop prefers an answer that already exists in the REPL over asking
-the model again (paper failure E.2).
+a fresh guess from the model (paper failure E.2): the forced finish shows the
+model what the REPL holds (``answer['content']``, the usual answer variables,
+the last output) and asks for one ``FINAL`` / ``FINAL_VAR``. A valid reply wins;
+otherwise the loop falls back to the answer dict, then an answer variable, then
+the reply's prose with code removed, then "". A code block is never the answer.
 
 ``protocol="tools"`` (issue #20) runs the same loop over OpenAI-style function
 calls: ``execute_python(code)`` replaces the fenced block and
@@ -51,7 +55,13 @@ from reclamo.client import Completion, ToolCall, Usage
 from reclamo.config import RLMConfig
 from reclamo.errors import RLMErrorLimit, RLMTimeout, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger, VerbosePrinter
-from reclamo.parsing import FinalCandidate, find_code_blocks, find_final, looks_like_plan
+from reclamo.parsing import (
+    FinalCandidate,
+    find_code_blocks,
+    find_final,
+    looks_like_plan,
+    strip_code,
+)
 from reclamo.prompts import (
     ContextMeta,
     build_system_prompt,
@@ -60,6 +70,7 @@ from reclamo.prompts import (
     fence_slip_note,
     final_rejection,
     forced_final_prompt,
+    forced_final_state,
     no_action_prompt,
     reverify_nudge,
     tool_specs,
@@ -82,8 +93,11 @@ class LMLike(Protocol):
 
 REPLFactory = Callable[[RLMConfig, LLMHandler], REPL]
 
-# Variables the forced finish looks for, in order, when the model never said FINAL.
+# Variables the forced finish shows the model, and falls back to in this order when
+# the model's forced reply is not a usable final.
 ANSWER_VAR_NAMES = ("final_answer", "answer_text", "result", "final")
+# The root-timeout forced finish is one call, thinking off, capped at this many seconds.
+FORCED_FINISH_TIMEOUT = 60.0
 CHARS_PER_TOKEN = 3.5
 KEEP_RECENT_TURNS = 4
 SUMMARY_CHARS = 1_500
@@ -233,6 +247,7 @@ class RLM:
         self._turn_max_prompt = 0
         self._full_history: list[dict[str, Any]] = []
         self._stats = _new_stats()
+        self._last_output: str | None = None
 
     # --- public -----------------------------------------------------------
 
@@ -624,6 +639,7 @@ class RLM:
 
     def _exec(self, repl: REPL, code: str) -> ExecResult:
         res = repl.execute(code)
+        self._last_output = res.output
         self._stats["executions"] += 1
         if res.error:
             key = "syntax_errors" if res.error.startswith("SyntaxError") else "exec_errors"
@@ -792,45 +808,94 @@ class RLM:
         started: float,
         why: str = "turns",
     ) -> RLMResult:
-        """Out of turns (or time): use what exists in the REPL before asking the model again."""
+        """Out of turns (or time): one more model call that sees what the REPL holds.
+
+        The model is shown ``answer['content']`` and every usual answer variable that
+        exists, so a stale variable cannot silently beat an answer the model just
+        printed (independent eval, Neuromancer large), and a good value already in
+        the REPL is one ``FINAL_VAR`` away (paper E.2). If the reply is not a usable
+        final, fall back: answer dict, then an answer variable, then the reply's
+        prose with code and thinking removed, then "".
+        """
         stop = "max_iterations" if why == "turns" else "timeout"
-        existing = self._partial(repl, answer_state)
-        if existing is not None:
-            self.logger.event("forced_finish", method="existing_value", depth=self.depth)
-            return self._finish(existing, stop, iterations, started)
+        dict_content = (answer_state or {}).get("content")
+        dict_value = str(dict_content) if dict_content else None
+        found_vars: list[tuple[str, str]] = []
+        for name in ANSWER_VAR_NAMES:
+            var = repl.get_var(name)
+            if var.found:
+                found_vars.append((name, var.value_str or ""))
+        shown = [("answer['content']", dict_value)] if dict_value is not None else []
+        shown += found_vars
 
         tools_mode = self.cfg.protocol == "tools"
         prompt = forced_final_prompt(why, self.cfg.protocol)
+        state = forced_final_state(shown, self._last_output)
+        if state:
+            prompt = f"{state}\n\n{prompt}"
         if history and history[-1]["role"] == "user":
             history[-1]["content"] = f"{history[-1]['content']}\n\n{prompt}"
         else:
             self._append(history, kinds=[], msg={"role": "user", "content": prompt}, kind="repl")
         tools = tool_specs(self.cfg.output_truncate_chars) if tools_mode else None
-        completion, _notes = self._root_call(history, tools)
+        if why == "time":
+            # Bounded: the run is already past its deadline, so exactly one attempt,
+            # thinking off, with a short request timeout.
+            extra: dict[str, Any] = {"tools": tools} if tools else {}
+            timeout = min(self.cfg.root.timeout, FORCED_FINISH_TIMEOUT)
+            completion = self.client.complete(
+                history, "root", enable_thinking=False, timeout=timeout, retry=False, **extra
+            )
+            self._budget_add(completion)
+        else:
+            completion, _notes = self._root_call(history, tools)
         content = completion.content
-        answer = content.strip()
-        cand = find_final(content)
+
+        candidates: list[FinalCandidate] = []
         for call in completion.tool_calls or []:
             if call.name != "final_answer":
                 continue
             args, _err = _parse_tool_args(call)
             tool_cand = _final_from_args(args, has_code=False)[0] if args is not None else None
             if tool_cand is not None:
-                cand = tool_cand
+                candidates.append(tool_cand)
+        text_cand = find_final(content)
+        if text_cand is not None:
+            # Code in the forced reply never runs, so it does not invalidate the FINAL.
+            candidates.append(dataclasses.replace(text_cand, has_code=False))
+
+        answer = ""
+        source = "empty"
+        detail: dict[str, Any] = {}
+        for cand in candidates:
+            accepted, value, reason, kind = self._judge_final(cand, repl, None, answer_state)
+            detail = {"candidate": cand.value, "kind": kind or cand.kind, "rejected": reason}
+            if accepted:
+                answer, source = value or "", "model"
                 break
-        if cand is not None:
-            if cand.kind == "FINAL_VAR" or _IDENT.match(cand.value):
-                var = repl.get_var(_strip_quotes(cand.value.strip()))
-                answer = var.value_str or "" if var.found else _strip_quotes(cand.value)
-            else:
-                answer = _strip_quotes(cand.value)
+        else:
+            if dict_value is not None:
+                answer, source = dict_value, "answer_dict"
+            elif found_vars:
+                name, answer = found_vars[0]
+                source = "variable"
+                detail["variable"] = name
+            elif not candidates:
+                # Only prose with no FINAL attempt at all; a rejected FINAL's text
+                # (a plan, a missing variable) is not an answer either.
+                prose = strip_code(content)
+                if prose and not looks_like_plan(prose) and not prose.endswith(":"):
+                    answer, source = prose, "reply_text"
         self.logger.event(
             "forced_finish",
-            method="model",
+            source=source,
+            why=why,
             depth=self.depth,
+            shown=[name for name, _ in shown],
             content=content,
             reasoning=completion.reasoning,
             tool_calls=[dataclasses.asdict(c) for c in completion.tool_calls or []],
+            **detail,
         )
         return self._finish(answer, stop, iterations, started)
 
