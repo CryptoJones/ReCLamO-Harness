@@ -52,6 +52,7 @@ def test_prompt_v01_reproduces_the_published_defaults() -> None:
     assert (old.max_iterations, old.output_truncate_chars, old.max_timeout) == (20, 2_000, 1_800.0)
     assert (old.max_subcalls_per_run, old.max_subcalls_per_exec) == (64, 24)
     assert (old.root.max_tokens, old.sub.max_tokens) == (4_096, 2_048)
+    assert (old.root.timeout, old.sub.timeout) == (300.0, 300.0)
     assert old.effective_subcall_chars == 12_000
     # and back again
     again = dataclasses.replace(old, prompt_version="v0.2")
@@ -108,7 +109,8 @@ def test_builtin_pluto_long_profile() -> None:
         assert (a.model, a.sampling, a.enable_thinking, a.max_tokens) == (
             b.model, b.sampling, b.enable_thinking, b.max_tokens,
         )  # fmt: skip
-    assert pluto.root.timeout == 300.0 and pluto.context_tokens == 32_768  # pluto unchanged
+    assert pluto.context_tokens == 32_768  # pluto's window unchanged
+    assert (pluto.root.timeout, pluto.sub.timeout) == (900.0, 900.0)  # v0.2 default
     assert cfg.max_iterations == pluto.max_iterations == 30
 
 

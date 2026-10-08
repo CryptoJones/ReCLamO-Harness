@@ -76,6 +76,12 @@ VERSION_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# Per-request timeout (seconds) when a role leaves ``timeout`` unset. v0.2 raises it
+# from 300 to 900 s: an 8,192-token thinking reply at ~35 tok/s (Strata, two slots) is
+# ~234 s of decode before any prompt reading, so 300 s cut long root turns short.
+ROLE_TIMEOUT_DEFAULTS = {"v0.1": 300.0, "v0.2": 900.0}
+
+
 def role_max_tokens_default(version: str, role: str, enable_thinking: bool) -> int:
     """Per-request output cap when the profile leaves ``max_tokens`` unset.
 
@@ -177,7 +183,8 @@ class ModelConfig:
     enable_thinking: bool = False
     reasoning_effort: str | None = None
     sampling: dict[str, Any] = field(default_factory=dict)
-    timeout: float = 300.0  # seconds per request
+    # Seconds per request; None = the prompt_version default (ROLE_TIMEOUT_DEFAULTS).
+    timeout: float | None = None
     # Per-role endpoint overrides; None inherits the profile-level value.
     base_url: str | None = None
     api_key_env: str | None = None
@@ -292,8 +299,14 @@ class RLMConfig:
             key = f"{role}.max_tokens"
             if unset(key, mc.max_tokens):
                 value = role_max_tokens_default(self.prompt_version, role, mc.enable_thinking)
-                setattr(self, role, dataclasses.replace(mc, max_tokens=value))
+                mc = dataclasses.replace(mc, max_tokens=value)
+                setattr(self, role, mc)
                 resolved[key] = value
+            key = f"{role}.timeout"
+            if unset(key, mc.timeout):
+                timeout = ROLE_TIMEOUT_DEFAULTS[self.prompt_version]
+                setattr(self, role, dataclasses.replace(mc, timeout=timeout))
+                resolved[key] = timeout
         self.defaults_resolved = resolved
 
     @property

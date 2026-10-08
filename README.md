@@ -331,6 +331,7 @@ profile used to get 4,096.)
 | sub `max_tokens` | 2,048 | 4,096 | Room for a full answer from a big sub-call |
 | `max_subcalls_per_run` | 64 | 256 | The paper's failure mode was "thousands of LM subcalls" (App. C), not hundreds. The cap stays as a safety net |
 | `max_subcalls_per_exec` | 24 | 64 | The same |
+| root / sub `timeout` (per request) | 300 s | 900 s | An 8,192-token thinking reply at ~35 tok/s (Strata, two slots) is ~234 s of decode before any prompt reading; at 300 s long root turns timed out and retried. `pluto-long` sets 1,800 s |
 | `max_timeout` (also `bench.py` / `run_eval.py`) | 1,800 s (scripts: 600 / 900 s) | 3,600 s | Time is not the constraint (CJ, 2026-10-08) |
 | reply cut off by the output limit | retried without thinking only if empty | also continued once (thinking off) when cut part-way with no usable action, and retried without thinking when the "content" is cut-off reasoning | Paper App. B, the same finding |
 
@@ -343,7 +344,9 @@ tokens) no longer fits there. Use `pluto-long` for plain.
 
 #### `pluto-long`: a fair plain baseline above 32K
 
-Strata accepts prompts far beyond its resident KV, but on `pluto` the profile's
+Strata accepts prompts far beyond its resident KV (`--max-context 262144`, with
+`--kv int8 --kv-resident 65536`; a 62,897-token prompt read at 227 tok/s on
+2026-10-08), but on `pluto` the profile's
 `context_tokens = 32768` also capped the **plain** baseline, whose usable window is
 `context_tokens` minus the root output reserve. Every medium and large plain row was
 therefore "does not fit". That was our limit, not the hardware's.
