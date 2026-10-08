@@ -1,3 +1,55 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 2)
+
+The generator below is the version of your task currently used for evaluation. A real evaluation run found this defect in it:
+
+**The scorer rejects a correct name written inside a sentence: the name regex runs with IGNORECASE, so 'Priya Patel was the only employee flagged...' matches as one long 'name' and a correct answer scores 0.5. Fix score() so a correct full name anywhere in a sentence gets full name credit (e.g. case-sensitive capitalised-name matching, or checking whether the true name occurs as a phrase), while wrong names still fail. Add self-test cases: the name embedded in a sentence plus the right amount scores 1.0; a different name plus the right amount scores < 1.**
+
+Return a corrected version that still satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, standard library only, Python 3.11 compatible: no backslashes inside f-string expressions). Keep the same task idea, question style and difficulty; change only what the defect requires. Same deliverable format: one paragraph (mention what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 from collections import defaultdict
@@ -157,20 +209,9 @@ def score(answer_text: str, truth: tuple[str, int]) -> float:
                         candidate_amount == truth_amount):
                         return 1.0
 
-    # Parse natural text: look for name and amount.
-    # NOTE 1: The name regex must be CASE-SENSITIVE. With re.IGNORECASE, a sentence such as
-    # "Priya Patel was the only employee flagged..." would have been matched as ONE giant
-    # "name" string ("Priya Patel was the only employee flagged"), and so a fully-correct
-    # answer (right name + right amount embedded in a sentence) would have gotten only 0.5
-    # -- because the captured "name" no longer equalled the truth name string.
-    # NOTE 2: The amount regex must capture the WHOLE digit run. The earlier `\d{1,3}`
-    # truncated an unformatted amount to its first three digits -- "39195" came out as
-    # "391" and "95" instead of "39195" -- so a fully-correct plain-text answer like
-    # "The answer is Priya Patel; total 39195." scored 0.5. Switching `\d{1,3}` to `\d+`
-    # keeps the comma-formatted path intact (`\d+(?:,\d{3})*` reads "39,195" as one match
-    # when the source uses comma separators) AND now reads unformatted totals intact too.
-    name_pattern = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
-    amount_pattern = re.compile(r"\$?\s*(\d+(?:,\d{3})*(?:\.\d{2})?)")
+    # Parse natural text: look for name and amount
+    name_pattern = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b", re.IGNORECASE)
+    amount_pattern = re.compile(r"\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)")
 
     names = name_pattern.findall(answer_text)
     amounts = amount_pattern.findall(answer_text)
@@ -205,102 +246,4 @@ if __name__ == "__main__":
         assert score(f"{data['answer'][0]}, $999999", data["answer"]) < 1.0
         assert score("Someone Else, $0", data["answer"]) == 0.0
 
-    # ----- Defect-specific regression assertions -----
-    # 1) A sentence with the CORRECT full name embedded plus the CORRECT amount must get 1.0.
-    #    Before the fix, the name regex was re.IGNORECASE, so the sentence's match grew to
-    #    include the trailing words and "name_ok" became False -> score dropped to 0.5.
-    # 2) A wrong name with the right amount must still get STRICTLY < 1 (the wrong-name half
-    #    of the AND must keep failing).
-    #
-    # We sweep the original task across the seed x size grid the task requires (seeds 0-9,
-    # all three sizes) and exercise both bug shapes on every cell. Any failure here means
-    # the original defect (or a regression) is back.
-    truth_name = "Priya Patel"
-    truth_amount = 39195
-    truth = (truth_name, truth_amount)
-    in_sentence_correct = (
-        f"The only employee flagged for both 'duplicate receipts' and "
-        f"'policy violation (high-risk vendor)' in the final summary was {truth_name}, "
-        f"with a total of ${truth_amount:,} in flagged expenses across their report."
-    )
-    wrong_name_right_amount = (
-        f"After reviewing the report, my conclusion is that Not A Person, "
-        f"had a total of ${truth_amount:,} in flagged expenses."
-    )
-    for seed in range(10):
-        for size in ["small", "medium", "large"]:
-            d = generate(seed, size)
-            n, amt = d["answer"]
-            sent_correct = (
-                f"The only employee flagged for both 'duplicate receipts' and "
-                f"'policy violation (high-risk vendor)' in the final summary was {n}, "
-                f"with a total of ${amt:,} in flagged expenses across their report."
-            )
-            wrong_sent = (
-                f"After reviewing the report, my conclusion is that Totally Different Person, "
-                f"had a total of ${amt:,} in flagged expenses."
-            )
-            assert score(sent_correct, d["answer"]) == 1.0, (
-                f"name-in-sentence + right amount must score 1.0 "
-                f"(seed={seed}, size={size}); got {score(sent_correct, d['answer'])}"
-            )
-            assert score(wrong_sent, d["answer"]) < 1.0, (
-                f"wrong name + right amount must score < 1 "
-                f"(seed={seed}, size={size}); got {score(wrong_sent, d['answer'])}"
-            )
-    print("MasterControl: defect-specific assertions PASS (sentence+name works; wrong name fails).")
-
-    # ----- TASK2 regression: raw / unformatted amount must score 1.0 -----
-    # The amount regex used to use `\d{1,3}` for its first digit run, which truncated an
-    # unformatted amount to its first three digits. "39195" thus matched as "391" and "95";
-    # neither parses to the truth_amount, so a fully-correct plain-text answer scored 0.5.
-    # After the fix the regex uses `\d+`, which reads the entire digit run as one capture
-    # AND still accepts the comma-formatted variant (`\d+(?:,\d{3})*` greedily reads
-    # "39,195" as one match) and the cents variant (`(?:\.\d{2})?`).
-    #
-    # For TRUTH = ('Priya Patel', 39195) the TASK requires ALL of the following:
-    #   "The answer is Priya Patel; total 39195."            -> 1.0   (raw / unformatted)
-    #   "Priya Patel was the only employee flagged, $39,195." -> 1.0   (comma-formatted)
-    #   "Priya Patel, $39195.00"                              -> 1.0   (cents, no comma)
-    #   "Someone Else, $39,195"                               -> < 1.0 (wrong name)
-    #   "Priya Patel, $39,000"                                -> < 1.0 (wrong amount)
-    #
-    # We verify the SAME contract across several seeds (so the answer/name/amount come
-    # out of generate() itself, not from a fixed hard-coded example). For each seed we
-    # build all three positive surfaces and both negative surfaces from the cell's own
-    # truth, then assert. A failure on any cell means the amount regex regressed.
-    for seed in range(10):
-        d = generate(seed, "medium")
-        n, amt = d["answer"]
-        # Positive surfaces (must score 1.0):
-        raw_amount_sentence = f"The answer is {n}; total {amt}."
-        formatted_amount_sentence = (
-            f"{n} was the only employee flagged, ${amt:,}."
-        )
-        cents_no_comma = f"{n}, ${amt}.00"
-        # Negative surfaces (must score strictly < 1.0):
-        wrong_name_right_amt = f"Someone Else, ${amt:,}"
-        right_name_wrong_amt = f"{n}, ${amt - 100:,}"
-
-        assert score(raw_amount_sentence, d["answer"]) == 1.0, (
-            f"raw amount sentence must score 1.0 (seed={seed}); "
-            f"got {score(raw_amount_sentence, d['answer'])}"
-        )
-        assert score(formatted_amount_sentence, d["answer"]) == 1.0, (
-            f"comma-formatted amount sentence must score 1.0 (seed={seed}); "
-            f"got {score(formatted_amount_sentence, d['answer'])}"
-        )
-        assert score(cents_no_comma, d["answer"]) == 1.0, (
-            f"cents-without-comma amount must score 1.0 (seed={seed}); "
-            f"got {score(cents_no_comma, d['answer'])}"
-        )
-        assert score(wrong_name_right_amt, d["answer"]) < 1.0, (
-            f"wrong name + right amount must score < 1 (seed={seed}); "
-            f"got {score(wrong_name_right_amt, d['answer'])}"
-        )
-        assert score(right_name_wrong_amt, d["answer"]) < 1.0, (
-            f"right name + wrong amount must score < 1 (seed={seed}); "
-            f"got {score(right_name_wrong_amt, d['answer'])}"
-        )
-    print("MasterControl: raw/unformatted-amount assertions PASS "
-          "(name + plain total = 1.0; wrong name or wrong amount < 1.0).")
+```

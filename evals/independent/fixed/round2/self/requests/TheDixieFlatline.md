@@ -1,3 +1,55 @@
+# Task: author ONE independent long-context evaluation task (as a runnable Python generator)
+
+You are helping evaluate a "Recursive Language Model" (RLM) harness. The system under test receives
+two strings — a very long CONTEXT and a QUESTION — and returns an ANSWER string. Internally it may run
+code over the context and call a language model on pieces of it, but you should treat it as a black box.
+The model behind it has a ~32K-token working window; contexts will be far larger than that.
+
+The harness authors wrote their own tests, and we suspect those tests are too easy and shaped to the
+harness. We want tests written by someone else: you. Do NOT try to guess how the harness works and do
+not design around it. Design a task that a careful human analyst with plenty of time would get right,
+but that is genuinely hard to get right without actually reading and reasoning over much of the context.
+
+## Requirements (all mandatory)
+1. Deliver a SINGLE self-contained Python 3.11 file in one ```python code block. Standard library only.
+2. It must expose: `generate(seed: int, size: str) -> dict` returning
+   `{"context": str, "question": str, "answer": <ground truth>, "meta": {...}}`
+   with `size` in {"small", "medium", "large"} giving roughly 60K, 300K and 1.2M characters of context.
+   And `score(answer_text: str, truth) -> float` in [0, 1], robust to formatting (case, punctuation,
+   ordering, extra prose) but NOT lenient about the substance.
+3. Fully deterministic given the seed (use `random.Random(seed)`, no time, no network, no files).
+4. Ground truth must be computed by the generator from its own data structures — never hand-written.
+5. **Grep-resistant**: the answer must not be recoverable by keyword search, regex, or simple counting
+   of surface tokens. Use paraphrase, varied vocabulary, distractors, negations, coreference
+   ("the latter", "her manager"), corrections later in the text that override earlier statements,
+   and facts whose meaning depends on other parts of the document. State in a comment WHY a regex /
+   keyword approach fails on your task.
+6. **Requires breadth**: the correct answer must depend on information spread across the whole
+   context (aggregation, multi-hop joins, temporal reasoning, consistency checking, etc.), not one spot.
+7. Natural-looking prose or semi-structured text (emails, logs, minutes, reports, chat) — not
+   obviously synthetic key=value lines.
+8. Include a short `if __name__ == "__main__":` that prints size stats, the question and the truth for
+   seed 0 at each size, and asserts `score(str(truth), truth) == 1.0` and that a few wrong answers score < 1.
+
+## Deliverable format
+- One paragraph: the task, what skill it tests, why it is hard, and the main way a solver would fail.
+- The single ```python block.
+- Nothing else. Do not read or modify any files; you do not need tools for this.
+
+
+---
+
+# Revision request (round 2)
+
+The generator below is the version of your task currently used for evaluation. A real evaluation run found this defect in it:
+
+**The answer is sometimes absent from the context: the assets' starting offices/locations are never written into the text, so when the final holder never moved or confirmed a location, the correct final location cannot be determined from the context. This happened in 3 of 5 cells run (seed 0 small and medium, seed 1 small). Make every fact needed to derive the answer appear in the context (e.g. state each holder's starting office somewhere in the text, as paraphrased prose consistent with the task's style), and add a self-test that, for seeds 0-9 at every size, the true final location string appears somewhere in the context.**
+
+Return a corrected version that still satisfies the whole brief (sizes ~60K/300K/1.2M, deterministic across processes, standard library only, Python 3.11 compatible: no backslashes inside f-string expressions). Keep the same task idea, question style and difficulty; change only what the defect requires. Same deliverable format: one paragraph (mention what you changed) then the single complete ```python block.
+
+## Current generator
+
+```python
 import random
 import re
 
@@ -55,35 +107,6 @@ def generate(seed: int, size: str) -> dict:
     signal_set = set(signal_indices)
 
     messages = []
-    timestamp = 1672531200 # Jan 1 2023
-
-    # DEFECT FIX: Establish initial locations and roles explicitly in the context.
-    setup_events = [("loc", n) for n in names] + [("role", r) for r in roles]
-    rng.shuffle(setup_events)
-    
-    for i, (ev_type, val) in enumerate(setup_events):
-        timestamp += rng.randint(300, 3600)
-        msg_header = f"Message-ID: <setup_{i:04d}@corp.local>\nDate: {timestamp}"
-        if ev_type == "loc":
-            name = val
-            loc = person_to_loc[name]
-            template = rng.choice([
-                "From: Facilities\nTo: {n}\nSubject: Welcome\n\nYour assigned office is {l}. Please pick up your keys.",
-                "From: HR\nTo: {n}\nSubject: Directory update\n\nWe have you listed in {l}. Let us know if this is incorrect.",
-                "From: IT\nTo: {n}\nSubject: Network hookup\n\nWe activated the ethernet port in your workspace at {l}."
-            ])
-            body = template.format(n=name, l=loc)
-        else:
-            role = val
-            person = role_to_person[role]
-            template = rng.choice([
-                "From: Management\nTo: All\nSubject: Organization Chart\n\nPlease be advised that {p} is our {r}.",
-                "From: HR\nTo: All\nSubject: Role Confirmation\n\nDirect all {r} inquiries to {p}.",
-                "From: {p}\nTo: All\nSubject: Introduction\n\nHi everyone, I will be serving as your {r}."
-            ])
-            body = template.format(p=person, r=role)
-        messages.append(f"{msg_header}\n{body}")
-
     fake_assets = ["Financial Records 2024", "The Blueprints", "Encrypted USB-C", "Old Laptops", "The Coffee Fund"]
     noise_templates = [
         "From: {n1}\nTo: {n2}\nSubject: Lunch\n\nAre we still meeting at {loc} for lunch?",
@@ -104,6 +127,7 @@ def generate(seed: int, size: str) -> dict:
     # 4. Adversarial traps: At the very end of the log, we inject distractor emails discussing the 
     #    asset moving to fake locations "tomorrow", which baits regex lookups targeting the final alias.
 
+    timestamp = 1672531200 # Jan 1 2023
     time_step = (365 * 24 * 3600) // num_messages
 
     for i in range(num_messages):
@@ -239,9 +263,4 @@ if __name__ == "__main__":
         assert score(f"{truth} but with lots of extra text to trigger the penalty " * 3, truth) == 0.5
         assert score("Totally Wrong Location", truth) == 0.0
 
-    print("Running self-tests to verify final locations exist in context...")
-    for sz in ["small", "medium", "large"]:
-        for s in range(10):
-            d = generate(seed=s, size=sz)
-            assert d['answer'] in d['context'], f"Defect: Answer {d['answer']} missing from context (seed {s}, size {sz})"
-    print("All self-tests passed.")
+```
