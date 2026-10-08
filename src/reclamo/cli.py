@@ -17,7 +17,7 @@ import openai
 
 from reclamo import __version__
 from reclamo.client import LMClient
-from reclamo.config import APIKeyError, ConfigError, RLMConfig, load_config, resolve_api_key
+from reclamo.config import APIKeyError, ConfigError, RLMConfig, load_config, resolve_api_keys
 from reclamo.errors import RLMError
 from reclamo.repl import DockerUnavailable
 
@@ -35,7 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    ping = sub.add_parser("ping", help="check the endpoint: models, a chat call, thinking")
+    ping = sub.add_parser(
+        "ping", help="check every endpoint in the profile: models, a chat call, thinking"
+    )
     _add_profile_args(ping)
     ping.set_defaults(func=cmd_ping)
 
@@ -85,32 +87,43 @@ def _add_profile_args(p: argparse.ArgumentParser) -> None:
 def _load_client(args: argparse.Namespace, label: str) -> tuple[RLMConfig, LMClient] | int:
     try:
         cfg = load_config(args.profile, args.profiles)
-        key = resolve_api_key(cfg)
+        keys = resolve_api_keys(cfg)  # one per distinct endpoint; never printed
     except (ConfigError, APIKeyError) as exc:
         print(f"reclamo {label}: {exc}", file=sys.stderr)
         return EXIT_CONFIG
-    return cfg, LMClient(cfg, key)
+    return cfg, LMClient(cfg, keys)
 
 
 def cmd_ping(args: argparse.Namespace) -> int:
-    out = sys.stdout
     loaded = _load_client(args, "ping")
     if isinstance(loaded, int):
         return loaded
     cfg, client = loaded
-    print(f"profile:  {cfg.name}", file=out)
-    print(f"base_url: {cfg.base_url}", file=out)
+    print(f"profile:  {cfg.name}", file=sys.stdout)
+    rc = EXIT_OK
+    for ep in cfg.endpoints():
+        if _ping_endpoint(cfg, client, ep.base_url, ep.roles) != EXIT_OK:
+            rc = EXIT_OTHER
+    return rc
+
+
+def _ping_endpoint(cfg: RLMConfig, client: LMClient, base_url: str, roles: tuple[str, ...]) -> int:
+    """Check one endpoint with the roles it serves; report under its own heading."""
+    out = sys.stdout
+    print(f"base_url: {base_url}", file=out)
+    print(f"roles:    {', '.join(roles)}", file=out)
+    probe_role = "sub" if "sub" in roles else roles[0]
 
     try:
-        models = client.list_models()
+        models = client.list_models(probe_role)
         print(f"models:   {', '.join(models) if models else '(none listed)'}", file=out)
     except openai.APIError as exc:
         print(f"models:   unavailable ({_short(exc)})", file=out)
 
     probe = [{"role": "user", "content": "Reply with the single word: pong"}]
     try:
-        plain = client.complete(probe, "sub", enable_thinking=False, max_tokens=16)
-        print(f"model:    {plain.model or cfg.sub.model}", file=out)
+        plain = client.complete(probe, probe_role, enable_thinking=False, max_tokens=16)
+        print(f"model:    {plain.model or cfg.role(probe_role).model}", file=out)
         print(f"reply:    {plain.content.strip()[:80]!r}", file=out)
         print(f"latency:  {plain.latency:.2f}s", file=out)
         if plain.usage is None:
@@ -123,11 +136,12 @@ def cmd_ping(args: argparse.Namespace) -> int:
                 file=out,
             )
 
-        thinking = client.complete(probe, "root", enable_thinking=True, max_tokens=512)
-        got = "yes" if thinking.reasoning else "no"
-        print(f"thinking: {got} (reasoning returned on an enable_thinking request)", file=out)
+        if "root" in roles:
+            thinking = client.complete(probe, "root", enable_thinking=True, max_tokens=512)
+            got = "yes" if thinking.reasoning else "no"
+            print(f"thinking: {got} (reasoning returned on an enable_thinking request)", file=out)
     except openai.APIError as exc:
-        print(f"reclamo ping: request failed: {_short(exc)}", file=sys.stderr)
+        print(f"reclamo ping: request failed: {_short(exc)} [{base_url}]", file=sys.stderr)
         return EXIT_OTHER
     return EXIT_OK
 

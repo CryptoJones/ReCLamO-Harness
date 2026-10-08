@@ -9,6 +9,13 @@ profile at load time: ``RECLAMO_BASE_URL`` and ``RECLAMO_MODEL``.
 The API key is never stored on the config. ``resolve_api_key`` reads it from the
 environment variable named by ``api_key_env`` (default ``RECLAMO_API_KEY``) and,
 failing that, from the stdout of ``api_key_cmd``.
+
+Per-role endpoints: ``[profiles.X.root]`` and ``[profiles.X.sub]`` may each set
+``base_url``, ``api_key_env``, ``api_key_cmd`` and ``concurrency``; anything left
+unset inherits the profile-level value. Roles that resolve to the same
+``base_url`` share one ``Endpoint`` (one HTTP client, one semaphore), so they
+must agree on the key source and concurrency. ``resolve_api_keys`` resolves one
+key per distinct endpoint.
 """
 
 from __future__ import annotations
@@ -92,6 +99,26 @@ class ModelConfig:
     reasoning_effort: str | None = None
     sampling: dict[str, Any] = field(default_factory=dict)
     timeout: float = 300.0  # seconds per request
+    # Per-role endpoint overrides; None inherits the profile-level value.
+    base_url: str | None = None
+    api_key_env: str | None = None
+    api_key_cmd: str | None = None
+    concurrency: int | None = None
+
+
+@dataclass(frozen=True)
+class Endpoint:
+    """One distinct server a profile talks to, and which roles it serves.
+
+    Holds the key *source* (env var name, command), never key material.
+    """
+
+    name: str  # profile name, for messages
+    base_url: str
+    api_key_env: str
+    api_key_cmd: str | None
+    concurrency: int
+    roles: tuple[str, ...]
 
 
 @dataclass(kw_only=True)
@@ -131,6 +158,48 @@ class RLMConfig:
             raise ConfigError(
                 f"protocol must be one of {', '.join(PROTOCOLS)}, not {self.protocol!r}"
             )
+        self.endpoints()  # validates that roles sharing a base_url agree
+
+    def _role_endpoint(self, role: str) -> tuple[str, str, str | None, int]:
+        mc = self.role(role)
+        return (
+            mc.base_url or self.base_url,
+            mc.api_key_env or self.api_key_env,
+            mc.api_key_cmd if mc.api_key_cmd is not None else self.api_key_cmd,
+            mc.concurrency if mc.concurrency is not None else self.concurrency,
+        )
+
+    def endpoints(self) -> list[Endpoint]:
+        """Distinct endpoints in role order (root first), keyed by base_url."""
+        grouped: dict[str, tuple[tuple[str, str, str | None, int], list[str]]] = {}
+        for role in ("root", "sub"):
+            spec = self._role_endpoint(role)
+            if spec[0] not in grouped:
+                grouped[spec[0]] = (spec, [role])
+                continue
+            first, roles = grouped[spec[0]]
+            if spec != first:
+                raise ConfigError(
+                    f"profile {self.name!r}: roles {roles[0]!r} and {role!r} share base_url "
+                    f"{spec[0]} but set different api_key_env/api_key_cmd/concurrency"
+                )
+            roles.append(role)
+        return [
+            Endpoint(
+                name=self.name,
+                base_url=url,
+                api_key_env=env,
+                api_key_cmd=cmd,
+                concurrency=max(1, conc),
+                roles=tuple(roles),
+            )
+            for (url, env, cmd, conc), roles in grouped.values()
+        ]
+
+    def endpoint(self, role: str) -> Endpoint:
+        """The endpoint that serves ``role``."""
+        url = self._role_endpoint(role)[0]
+        return next(ep for ep in self.endpoints() if ep.base_url == url)
 
     def role(self, role: str) -> ModelConfig:
         if role == "root":
@@ -216,8 +285,11 @@ def load_config(
         known = ", ".join(sorted(profiles))
         raise ConfigError(f"unknown profile {profile!r}; available: {known}")
     table = dict(profiles[profile])
-    if env.get(BASE_URL_ENV):
+    if env.get(BASE_URL_ENV):  # one URL for everything, as before per-role endpoints
         table["base_url"] = env[BASE_URL_ENV]
+        for role in ("root", "sub"):
+            if isinstance(table.get(role), Mapping):
+                table[role] = {k: v for k, v in table[role].items() if k != "base_url"}
     if env.get(MODEL_ENV):
         for role in ("root", "sub"):
             table[role] = {**table.get(role, {}), "model": env[MODEL_ENV]}
@@ -225,12 +297,14 @@ def load_config(
 
 
 def resolve_api_key(
-    cfg: RLMConfig,
+    cfg: RLMConfig | Endpoint,
     *,
     env: Mapping[str, str] | None = None,
     run: Any = subprocess.run,
 ) -> str:
     """Return the API key from ``cfg.api_key_env``, else from ``cfg.api_key_cmd``.
+
+    ``cfg`` is a whole profile (its profile-level key source) or one ``Endpoint``.
 
     ``run`` is ``subprocess.run`` by default and is injectable for tests. The key is
     returned to the caller only; it is not logged, cached on ``cfg`` or echoed in
@@ -244,6 +318,7 @@ def resolve_api_key(
     if not cfg.api_key_cmd:
         raise APIKeyError(
             f"no API key: set {cfg.api_key_env}, or add api_key_cmd to profile {cfg.name!r}"
+            + (f" (endpoint {cfg.base_url})" if isinstance(cfg, Endpoint) else "")
         )
 
     argv = shlex.split(cfg.api_key_cmd)
@@ -272,3 +347,13 @@ def resolve_api_key(
             f"({cfg.api_key_cmd!r}) printed nothing"
         )
     return key[0].strip()
+
+
+def resolve_api_keys(
+    cfg: RLMConfig,
+    *,
+    env: Mapping[str, str] | None = None,
+    run: Any = subprocess.run,
+) -> dict[str, str]:
+    """One key per distinct endpoint, as ``{base_url: key}``. Never logged."""
+    return {ep.base_url: resolve_api_key(ep, env=env, run=run) for ep in cfg.endpoints()}

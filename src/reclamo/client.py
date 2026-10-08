@@ -7,7 +7,8 @@ What it adds over a raw ``chat.completions.create``:
 - non-standard sampling keys (``top_k``, ``min_p``, ...) sent via ``extra_body``;
 - ``<think>...</think>`` stripped from ``content`` and kept as ``reasoning``;
 - ``reasoning_content`` used when ``content`` comes back empty;
-- a semaphore that serialises calls (pluto serves one request at a time);
+- one HTTP client and one semaphore per distinct endpoint (pluto serves one
+  request at a time; a root on another host is not serialised behind it);
 - bounded retries with exponential backoff on 429, 5xx, timeouts and
   connection errors;
 - tolerant usage accounting (a missing ``usage`` field is not an error);
@@ -29,7 +30,7 @@ from typing import Any
 
 import openai
 
-from reclamo.config import ModelConfig, RLMConfig
+from reclamo.config import Endpoint, ModelConfig, RLMConfig, resolve_api_key
 
 Message = Mapping[str, Any]
 
@@ -85,6 +86,14 @@ class Completion:
     content_from_reasoning: bool = False
     attempts: int = 1
     tool_calls: list[ToolCall] | None = None
+    endpoint: str | None = None  # base_url that served this call
+
+
+@dataclass
+class _Conn:
+    endpoint: Endpoint
+    client: Any
+    sem: threading.BoundedSemaphore
 
 
 def split_think(text: str) -> tuple[str, str | None]:
@@ -120,31 +129,59 @@ def split_think(text: str) -> tuple[str, str | None]:
 
 
 class LMClient:
-    """Serialised, retrying chat-completion client for one profile."""
+    """Retrying chat-completion client for one profile, one connection per endpoint.
+
+    ``api_key`` is either one key (the profile-level key; an endpoint with its own
+    ``api_key_env``/``api_key_cmd`` resolves its key here instead) or a mapping
+    ``{base_url: key}`` as returned by ``resolve_api_keys``. ``client`` injects one
+    SDK client used for every endpoint (tests).
+    """
 
     def __init__(
         self,
         cfg: RLMConfig,
-        api_key: str,
+        api_key: str | Mapping[str, str],
         *,
         client: openai.OpenAI | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.cfg = cfg
-        self._api_key = api_key
         self._sleep = sleep
-        # The SDK's own retries are turned off so backoff lives in one place.
-        self._client = client or openai.OpenAI(
-            base_url=cfg.base_url, api_key=api_key, max_retries=0
-        )
-        self._sem = threading.BoundedSemaphore(max(1, cfg.concurrency))
+        self._conns: dict[str, _Conn] = {}
+        for ep in cfg.endpoints():
+            if client is not None:
+                sdk: Any = client
+            else:
+                # The SDK's own retries are turned off so backoff lives in one place.
+                sdk = openai.OpenAI(
+                    base_url=ep.base_url, api_key=self._key_for(ep, api_key), max_retries=0
+                )
+            self._conns[ep.base_url] = _Conn(ep, sdk, threading.BoundedSemaphore(ep.concurrency))
         self._lock = threading.Lock()
         self.totals = Usage()
         self.calls = 0
         self.calls_without_usage = 0
 
+    def _key_for(self, ep: Endpoint, api_key: str | Mapping[str, str]) -> str:
+        if isinstance(api_key, str):
+            if (ep.api_key_env, ep.api_key_cmd) == (self.cfg.api_key_env, self.cfg.api_key_cmd):
+                return api_key
+        elif ep.base_url in api_key:
+            return api_key[ep.base_url]
+        return resolve_api_key(ep)
+
     def __repr__(self) -> str:  # never include the key
-        return f"LMClient(profile={self.cfg.name!r}, base_url={self.cfg.base_url!r})"
+        urls = ", ".join(self._conns)
+        return f"LMClient(profile={self.cfg.name!r}, endpoints=[{urls}])"
+
+    def _conn(self, role: str) -> _Conn:
+        url = self.cfg.endpoint(role).base_url
+        try:
+            return self._conns[url]
+        except KeyError:
+            raise ValueError(
+                f"role {role!r} points at {url}, which this client was not built for"
+            ) from None
 
     # --- requests ---------------------------------------------------------
 
@@ -208,11 +245,13 @@ class LMClient:
             tools=tools,
             timeout=timeout,
         )
+        conn = self._conn(role)
         started = time.monotonic()
-        with self._sem:
-            response, attempts = self._call_with_retry(kwargs, retry)
+        with conn.sem:
+            response, attempts = self._call_with_retry(conn.client, kwargs, retry)
         latency = time.monotonic() - started
         completion = self._parse(response, role=role, latency=latency, attempts=attempts)
+        completion.endpoint = conn.endpoint.base_url
         with self._lock:
             self.calls += 1
             if completion.usage is None:
@@ -221,19 +260,21 @@ class LMClient:
                 self.totals.add(completion.usage)
         return completion
 
-    def list_models(self) -> list[str]:
-        """Model ids from ``/v1/models``; an empty list is not an error."""
-        page = self._client.models.list()
+    def list_models(self, role: str = "root") -> list[str]:
+        """Model ids from ``/v1/models`` on ``role``'s endpoint; an empty list is not an error."""
+        page = self._conn(role).client.models.list()
         return [m.id for m in getattr(page, "data", None) or []]
 
     # --- internals --------------------------------------------------------
 
-    def _call_with_retry(self, kwargs: dict[str, Any], retry: bool = True) -> tuple[Any, int]:
+    def _call_with_retry(
+        self, sdk: Any, kwargs: dict[str, Any], retry: bool = True
+    ) -> tuple[Any, int]:
         attempts = 0
         while True:
             attempts += 1
             try:
-                return self._client.chat.completions.create(**kwargs), attempts
+                return sdk.chat.completions.create(**kwargs), attempts
             except openai.APIError as exc:
                 if not retry or not _retryable(exc) or attempts > self.cfg.max_retries:
                     raise
