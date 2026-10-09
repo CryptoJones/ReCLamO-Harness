@@ -93,6 +93,13 @@ def b_cerebex(d):
     bad["zero_when_not"] = "0" if ti else "125"
     bad["truth_then_wrong"] = f"I first got {ti} but the final total is {ti + 250}."
     bad["wrong_then_truth_in_text"] = f"The total is {ti + 250} (not {ti})."
+    # Round 3.1 (#63): "Label: value" followed by a dash clause or markdown.
+    ok["label_colon"] = f"Total: ${ti:,}"
+    ok["label_colon_dash"] = f"Total: ${ti:,} — after all amendments"
+    ok["md_bold_label_value"] = f"**Total:** **${ti:,}**"
+    ok["md_bold_label_dash"] = f"**Total reimbursed:** ${ti:,} — across the qualifying claims"
+    bad["label_colon_dash_wrong"] = f"Total: ${ti + 100:,} — after all amendments"
+    bad["md_bold_label_wrong"] = f"**Total:** **${ti + 1:,}**"
     return ok, bad
 
 
@@ -130,6 +137,15 @@ def b_glados(d):
     bad["shotgun_amounts"] = f"Candidates: ${amt - 50000:,}, ${amt:,}, ${amt + 50000:,}; {name}; passed"
     bad["shotgun_names"] = f"${amt:,}; certifying member {wrong_name} (or possibly {name}); passed"
     bad["amount_only"] = f"${amt:,}"
+    # Round 3.1 (#63): "Label: value — Label: value" and markdown variants.
+    ok["label_dash_chain"] = f"Net authorized amount: ${amt:,} — Certifying member: {name} — Outcome: {out}"
+    ok["md_bold_label_dash"] = f"**Net authorized amount:** **${amt:,}** — **Certifying member:** **{name}** — {out}"
+    ok["member_colon_first"] = f"{name}: certified the restated authorization of ${amt:,}, which {out}."
+    ok["paren_member"] = f"${amt:,} (certified by {name}; {out})"
+    ok["label_lines"] = f"Net authorized amount: ${amt:,}\nCertifying member: {name}\nOutcome: {out}"
+    bad["label_dash_chain_wrong_amount"] = f"Net authorized amount: ${amt + 25:,} — Certifying member: {name} — Outcome: {out}"
+    bad["label_dash_chain_wrong_name"] = f"Net authorized amount: ${amt:,} — Certifying member: {wrong_name} — Outcome: {out}"
+    bad["md_bold_label_hedged_name"] = f"**Net authorized amount:** **${amt:,}** — **Certifying member:** {wrong_name} or {name}"
     return ok, bad
 
 
@@ -154,6 +170,15 @@ def b_mastercontrol(d):
     bad["shotgun_names"] = f"Either {other} or {name}; ${amt:,}"
     bad["shotgun_amounts"] = f"{name}; ${amt - 1000:,} or ${amt:,}"
     bad["name_only"] = name
+    # Round 3.1 (#63): "Name: value" followed by a dash clause or markdown.
+    ok["name_colon"] = f"{name}: ${amt:,}"
+    ok["name_colon_dash"] = f"{name}: ${amt:,} — total flagged expenses"
+    ok["md_bold_name_colon_dash"] = f"**{name}:** **${amt:,}** — highest flagged total"
+    ok["name_paren_amount"] = f"{name} (${amt:,})"
+    ok["label_dash"] = f"Employee: {name} — Total flagged: ${amt:,}"
+    bad["name_colon_dash_wrong_amount"] = f"{name}: ${amt + 1:,} — total flagged expenses"
+    bad["other_colon_dash"] = f"{other}: ${amt:,} — total flagged expenses"
+    bad["md_bold_hedged_name"] = f"**{other}** or **{name}:** ${amt:,}"
     return ok, bad
 
 
@@ -174,7 +199,41 @@ def b_multivac(d):
     ok["desc_trailing_period"] = f"{rid}\nStatus: {st}\nDescription: {de}."
     ok["desc_collapsed_space"] = f"{rid}\nStatus: {st}\nDescription: {re.sub(' +', ' ', de)}"
     ok["rid_spaced"] = f"Requirement R {rid[1:]}\nStatus: {st}\nDescription: {de}"
+    # Round 3.1 (#63): "ID: description — Status: X" and its relatives.
+    ok["id_desc_dash_status"] = f"{rid}: {de} — Status: {st}"
+    ok["id_desc_dash_status_priority"] = f"{rid}: {de} — Status: {st}, Priority: Low"
+    ok["id_desc_dash_status_paren_priority"] = f"{rid}: {de} — Status: {st} (Priority: Low). No later updates."
+    ok["id_desc_hyphen_status"] = f"{rid}: {de} - Status: {st}"
+    ok["id_desc_endash_status"] = f"{rid}: {de} – Status: {st}"
+    ok["id_desc_bar_status"] = f"{rid}: {de} | Status: {st}"
+    ok["id_desc_newline_status"] = f"{rid}: {de}\nStatus: {st}"
+    ok["id_dash_desc_paren_status"] = f"{rid} — {de} (Status: {st})"
+    ok["id_desc_paren_status_priority"] = f"{rid}: {de} (Status: {st}, Priority: Low)"
+    ok["id_quoted_desc_dash_status"] = f"Requirement {rid}: \"{de}\" — Status: {st}, Priority: Low."
+    ok["id_dash_status_then_desc"] = f"{rid} — Status: {st}. Description: {de}"
+    ok["md_bold_id_desc_dash_status"] = f"**{rid}**: {de} — **Status:** {st}"
+    ok["md_bold_desc_dash_status"] = f"**{rid}:** **{de}** — Status: **{st}**"
+    ok["md_bullet_paren_bold_status"] = f"- **{rid}**: {de} (**Status**: {st})"
+    ok["md_heading_desc_then_bullets"] = (f"Requirement **{rid}** is described as:\n\n**{rid}: {de}**\n\n"
+                                          f"- **Current Status:** {st}\n- **Priority:** Medium")
+    ok["md_bullets_full_desc_first"] = (f"Requirement **{rid}**:\n\n- **Full Description:** {de}\n"
+                                        f"- **Current Status:** {st}\n- **Priority:** Low")
     other_st = [s for s in ["Pending", "In Progress", "Completed", "Blocked", "On Hold", "Rejected", "Approved"] if s.lower() != st.lower()][0]
+    ok["history_in_later_paragraph"] = (f"**{rid}: {de}**\n\n- **Current Status:** {st}\n\n"
+                                        f"The status was originally set to \"{other_st}\" and later changed.")
+    bad["id_desc_dash_wrong_status"] = f"{rid}: {de} — Status: {other_st}"
+    bad["id_desc_dash_hedged_status"] = f"{rid}: {de} — Status: {st} or {other_st}"
+    bad["id_desc_dash_hedged_status_rev"] = f"{rid}: {de} — Status: {other_st} or {st}"
+    bad["id_desc_paren_hedged_status"] = f"{rid} — {de} (Status: {other_st} or {st})"
+    bad["md_bold_desc_wrong_status"] = f"**{rid}:** **{de}** — Status: **{other_st}**"
+    bad["id_desc_dash_shotgun_status"] = f"{rid}: {de} — Status: {other_st} (earlier status: {st})"
+    bad["id_desc_dash_extra_clause"] = f"{rid}: {de} — must also support mobile devices — Status: {st}"
+    bad["id_desc_paren_extra_then_status"] = f"{rid}: {de} (Must also support offline mode) — Status: {st}"
+    bad["id_partial_desc_dash_status"] = f"{rid}: {de[: max(5, len(de)//2)]} — Status: {st}"
+    bad["id_no_desc_dash_status"] = f"{rid} — Status: {st}"
+    bad["wrong_id_desc_dash_status"] = f"R{int(rid[1:]) + 1000}: {de} — Status: {st}"
+    bad["wrong_id_extends_truth"] = f"{rid}0: {de} — Status: {st}"
+    bad["same_paragraph_hedge"] = f"**{rid}: {de}**\n\n- **Current Status:** {st}\n- or possibly {other_st}"
     bad["wrong_status"] = f"{rid}\nStatus: {other_st}\nDescription: {de}"
     bad["partial_desc"] = f"{rid}\nStatus: {st}\nDescription: {de[: max(5, len(de)//2)]}"
     bad["shotgun_status"] = f"{rid}\nStatus: {other_st} (earlier status: {st})\nDescription: {de}"
@@ -194,6 +253,13 @@ def b_neuromancer(d):
     bad["off_by_one"] = f"${v + 1:.2f}"
     bad["shotgun"] = f"Either ${v - 100:.2f} or ${v:.2f}"
     bad["truth_negated"] = f"Not ${v:.2f}; it is ${v + 200:.2f}"
+    # Round 3.1 (#63): "Label: value" followed by a dash clause or markdown.
+    ok["label_colon"] = f"Total: ${v:,.2f}"
+    ok["label_colon_dash"] = f"Total: ${v:,.2f} — after all amendments"
+    ok["md_bold_label_value"] = f"**Total:** **${v:,.2f}**"
+    ok["md_bold_label_dash"] = f"**Total reimbursed:** ${v:,.2f} — across the qualifying claims"
+    bad["label_colon_dash_wrong"] = f"Total: ${v + 1:,.2f} — after all amendments"
+    bad["md_bold_label_wrong"] = f"**Total:** **${v + 0.01:,.2f}**"
     return ok, bad
 
 
@@ -228,6 +294,18 @@ def b_selma(d):
         bad["first_name_only"] = t.split()[0]
         bad["shotgun_two_names"] = f"Ownership moved from {t} to {o}; the final owner is {o}."
         bad["unassigned"] = "Unassigned"
+    # Round 3.1 (#63): "Label: value" followed by a dash clause or markdown.
+    ok["label_dash"] = f"Final owner: {t} — after the last reassignment"
+    ok["md_bold_label_value"] = f"**Final owner:** **{t}**"
+    ok["md_bold_owner"] = f"**Owner:** {t}"
+    ok["task_colon"] = f"AI Ethics Review: {t}"
+    ok["task_colon_dash"] = f"AI Ethics Review: {t} — current owner"
+    wrong = "Assigned" if t == "Unassigned" else (others[0] if others else "Alex Smith")
+    if t != "Unassigned" and wrong == t:
+        wrong = "Alex Smith"
+    bad["label_dash_wrong"] = f"Final owner: {wrong} — after the last reassignment"
+    bad["md_bold_label_wrong"] = f"**Final owner:** **{wrong}**"
+    bad["task_colon_hedged"] = f"AI Ethics Review: {wrong} or {t}"
     return ok, bad
 
 
@@ -259,6 +337,15 @@ def b_shodan(d):
     z = {o: 0 for o in offs}; bad["all_zero"] = json.dumps(z)
     sw = dict(t); sw[nz[0]], sw[offs[0] if offs[0] != nz[0] else offs[1]] = 0, t[nz[0]]
     bad["swapped"] = json.dumps(sw)
+    # Round 3.1 (#63): "Office: value" followed by a dash clause or markdown.
+    ok["colon_dash"] = "\n".join(f"{o}: {t[o]} — earned credits" for o in offs)
+    ok["md_bold_both"] = "\n".join(f"**{o}:** **{t[o]}**" for o in offs)
+    ok["bullets_md_credits"] = "\n".join(f"- **{o}**: {t[o]} credits" for o in offs)
+    ok["inline_semicolon"] = "; ".join(f"{o}: {t[o]}" for o in offs)
+    ok["inline_comma"] = ", ".join(f"{o}: {t[o]}" for o in offs)
+    ok["paren_value"] = "\n".join(f"{o} ({t[o]})" for o in offs)
+    bad["colon_dash_off_by_one"] = "\n".join(f"{o}: {w[o]} — earned credits" for o in offs)
+    bad["md_bold_off_by_one"] = "\n".join(f"**{o}:** **{w[o]}**" for o in offs)
     return ok, bad
 
 
@@ -280,6 +367,16 @@ def b_dixie(d):
         n = int(t.split()[1])
         bad["off_by_one_room"] = f"Room {n + 1 if n < 149 else n - 1}"
         bad["number_only"] = str(n)
+    # Round 3.1 (#63): "Label: value" followed by a dash clause or markdown.
+    o1 = others[0] if others else "The Annex"
+    ok["label"] = f"Final location: {t}"
+    ok["label_dash"] = f"Final location: {t} — after the CORRECTION email"
+    ok["md_bold_label_value"] = f"**Final location:** **{t}**"
+    ok["asset_colon"] = f"The Genesis Drive: {t}"
+    ok["asset_colon_dash"] = f"The Genesis Drive: {t} — current physical location"
+    bad["label_dash_wrong"] = f"Final location: {o1} — after the CORRECTION email"
+    bad["md_bold_label_wrong"] = f"**Final location:** **{o1}**"
+    bad["asset_colon_hedged"] = f"The Genesis Drive: {o1} or {t}"
     return ok, bad
 
 

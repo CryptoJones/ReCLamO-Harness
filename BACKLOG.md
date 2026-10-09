@@ -26,6 +26,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [x] `max_errors` raises `RLMErrorLimit` with no forced finish, losing the run's work ([#50](https://github.com/CryptoJones/ReCLamO-Harness/issues/50))
 - [x] `max_timeout` can be overrun: deadline checked only at turn start, out-of-turns forced finish unbounded ([#51](https://github.com/CryptoJones/ReCLamO-Harness/issues/51))
 - [ ] run_eval/bench record provider errors (429 quota) as scored 0.00 rows ([#56](https://github.com/CryptoJones/ReCLamO-Harness/issues/56))
+- [x] Multivac scorer gives 0.2 to a correct `R142: <description> — Status: X` answer ([#63](https://github.com/CryptoJones/ReCLamO-Harness/issues/63)) — round 3.1, scorer-only; `run_eval.py --rescore`
 
 ### Fidelity to the paper (arXiv 2512.24601) and upstream rlm
 

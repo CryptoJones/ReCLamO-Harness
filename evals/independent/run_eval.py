@@ -301,6 +301,84 @@ def load_rows(
 
 
 write_rows = bench.write_rows
+STORED_ANSWER_CHARS = 2000  # bench.run_rlm / run_plain store answer[:2000]
+
+
+# --- re-scoring --------------------------------------------------------------------
+
+
+def rescore_rows(rows: list[dict[str, Any]], gens: Generators) -> int:
+    """Re-score every answered row in place with the current active scorers.
+
+    The truth comes from regenerating the instance (the exam is frozen, so it equals the
+    stored key; ``truth_changed`` flags a row where it does not). Each row keeps its old
+    score as ``old_score`` and gets ``new_score``; ``score`` and ``exact`` follow the new
+    one. Rows that were never scored (does not fit, provider error) are left alone.
+    Legacy best-of-2 plain rows have each variant re-scored and the choice re-derived.
+    bench.py stores at most ``STORED_ANSWER_CHARS`` of each answer, so a row whose answer
+    hit that cap keeps its score (``rescore_skipped``): the scorer saw text that is gone.
+    Returns the number of rows whose score changed.
+    """
+    truths: dict[tuple[str, str, int], Any] = {}
+    changed = 0
+    for row in rows:
+        if row.get("score") is None:
+            continue
+        answers = [v.get("answer") or "" for v in (row.get("variants") or {}).values()]
+        answers.append(row.get("answer") or "")
+        if any(len(a) >= STORED_ANSWER_CHARS for a in answers):
+            row["rescore_skipped"] = f"answer stored truncated to {STORED_ANSWER_CHARS} chars"
+            continue
+        lane, size, seed = row["task"], str(row["size"]), int(row["seed"])
+        key = (lane, size, seed)
+        if key not in truths:
+            truths[key] = gens.get(lane).generate(seed, size)["answer"]
+        truth = truths[key]
+        scorer = generator_scorer(gens.get(lane))
+        old = row["score"]
+        row["truth_changed"] = _jsonable(truth) != row.get("truth")
+        variants = row.get("variants")
+        if variants:
+            for variant in variants.values():
+                if variant.get("score") is not None:
+                    variant["old_score"] = variant["score"]
+                    variant["score"] = scorer(variant.get("answer") or "", truth).score
+                    variant["exact"] = variant["score"] == 1.0
+            bench.apply_legacy(row, "accuracy", legacy=row.get("legacy_plain", "best-of-2"))
+        else:
+            row["score"] = scorer(row.get("answer") or "", truth).score
+        row["old_score"] = old
+        row["new_score"] = row["score"]
+        finish_row(row)
+        changed += row["new_score"] != old
+    return changed
+
+
+def rescore_file(
+    path: Path, out: Path | None = None, manifest: dict[str, Any] | None = None
+) -> tuple[Path, int, list[dict[str, Any]]]:
+    """Re-score ``path`` into ``out`` (default ``<name>.rescored.json``); never in place."""
+    manifest = manifest or load_manifest()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    meta, rows = data.get("meta", {}), data.get("rows", [])
+    changed = rescore_rows(rows, Generators(manifest))
+    out = out or path.with_name(path.stem + ".rescored.json")
+    if out.resolve() == path.resolve():
+        raise ValueError("--rescore never overwrites its input; pass a different --out")
+    meta = {
+        **meta,
+        "rescored": {
+            "from": str(path),
+            "at": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
+            "rows_changed": changed,
+            "rows_skipped_truncated": sum("rescore_skipped" in r for r in rows),
+            "active_sha256": {
+                lane: manifest["generators"][lane]["active"]["sha256"] for lane in LANES
+            },
+        },
+    }
+    write_rows(out, meta, rows)
+    return out, changed, rows
 
 
 # --- summary -----------------------------------------------------------------------
@@ -501,6 +579,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--resume", default=None, metavar="FILE", help="continue this JSON")
     parser.add_argument("--summary-only", default=None, metavar="FILE", help="summarise; no runs")
     parser.add_argument(
+        "--rescore",
+        default=None,
+        metavar="FILE",
+        help="re-score FILE's answers with the current active scorers into --out (default "
+        "FILE.rescored.json), recording old_score/new_score per row; no runs",
+    )
+    parser.add_argument(
         "--legacy-plain",
         choices=bench.LEGACY_PLAIN,
         default="best-of-2",
@@ -540,6 +625,28 @@ def main(argv: list[str] | None = None) -> int:
     if args.summary_only:
         _meta, rows = load_rows(Path(args.summary_only), args.legacy_plain)
         print(format_summary(rows, manifest))
+        return 0
+
+    if args.rescore:
+        try:
+            out, changed, rows = rescore_file(
+                Path(args.rescore), Path(args.out) if args.out else None, manifest
+            )
+        except ValueError as exc:
+            print(f"run_eval: {exc}", file=err)
+            return 2
+        for row in rows:
+            if "new_score" in row and row["new_score"] != row["old_score"]:
+                print(
+                    f"{row['task']} {row['size']} {row['mode']} seed={row['seed']}: "
+                    f"{row['old_score']} -> {row['new_score']}",
+                    file=err,
+                )
+        rows = [finish_row(bench.apply_legacy(r, "accuracy", legacy=args.legacy_plain)) for r in rows]
+        summary = format_summary(rows, manifest)
+        out.with_suffix(".md").write_text(summary + "\n", encoding="utf-8")
+        print(summary)
+        print(f"\n{changed} row(s) changed\nrows: {out}\nsummary: {out.with_suffix('.md')}")
         return 0
 
     try:

@@ -185,4 +185,26 @@ Known residuals:
 - Cerebex is 0 on about 26% of seeds, and some "paperwork" mentions are non-travel
   distractors.
 
+## Round 3.1 (scorer-only, 2026-10-08)
+
+Issue #63: Multivac's `score()` gave 0.2 to a correct
+`R142: <description> — Status: Pending` answer. The description had to end at
+punctuation or at the end of the text, so a dash, bullet, newline or markdown closer
+followed by the status field failed that check. Three fixes, all inside `score()`:
+- The description may now be followed by another field label (`Status`, `Priority`,
+  `State`). A dash, bar or bullet before the label is allowed, and so is a
+  `(Status: ...)` paren.
+- A paragraph break ends the status field, so a later "the status was originally
+  Pending" no longer counts as a hedge.
+- The requirement id must match whole, so `R14` no longer matches `R142`.
+
+**Contexts, questions and answer keys are unchanged.** `generate()` output is
+byte-identical for every size and seeds 0-9, so the exam is still frozen. The scorer
+battery gained probes for the `ID: value` shapes in all 8 tasks (2,111 probes, 0 flags).
+The other seven scorers already handled these shapes and are untouched.
+
+To re-score rows produced before this round:
+`uv run python evals/independent/run_eval.py --rescore FILE [--out NEW]`. It writes
+`FILE.rescored.json` plus a summary, and records `old_score` / `new_score` on every row.
+
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*
