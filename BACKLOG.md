@@ -28,6 +28,10 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] run_eval/bench record provider errors (429 quota) as scored 0.00 rows ([#56](https://github.com/CryptoJones/ReCLamO-Harness/issues/56))
 - [x] Multivac scorer gives 0.2 to a correct `R142: <description> — Status: X` answer ([#63](https://github.com/CryptoJones/ReCLamO-Harness/issues/63)) — round 3.1, scorer-only; `run_eval.py --rescore`
 
+### Evaluation
+
+- [ ] Repeat the full main grid with qwen4exp's own sampling defaults (sampling as a factor) ([#69](https://github.com/CryptoJones/ReCLamO-Harness/issues/69))
+
 ### Fidelity to the paper (arXiv 2512.24601) and upstream rlm
 
 - [ ] Plain baseline picks the better of two attempts using the ground truth ([#57](https://github.com/CryptoJones/ReCLamO-Harness/issues/57))
