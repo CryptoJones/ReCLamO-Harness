@@ -483,16 +483,26 @@
           "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
           "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
           "result": "pass (check.py, self-test, 0 scorer-battery flags)"
+        },
+        {
+          "round": "3.1",
+          "defect": "scorer only: a correct 'R142: <description> — Status: X' answer scored 0.2 (the description boundary check rejected a dash/bullet/markdown-separated status field), later-paragraph status history counted as a hedge, and the req id matched as a prefix",
+          "found_by": "v0.2 experiment (runs/exp-v02), issue #63",
+          "by": "Claude Code (Opus 5.5), scorer-only edit to score()",
+          "file": "fixed/active/Multivac.py",
+          "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
+          "result": "pass (self-test, byte-identical generate() for every size x seeds 0-9, scorer_battery.py 0 flags)"
         }
       ],
       "active": {
         "file": "fixed/active/Multivac.py",
-        "sha256": "cde2e41a66daea46bc1fec2c121388111e24df30323a10d287146175f7f3e010",
-        "source": "round-3 minimax fix"
+        "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
+        "source": "round-3 minimax fix + round-3.1 scorer fix (#63)"
       }
     }
   },
   "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent.",
   "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run.",
-  "round3_note": "Round 3 (2026-10-08): fixes for the independent audit (audit/REPORT.md): Cerebex hidden-division key, SELMA date/order contradiction, TheDixieFlatline missing CORRECTION email, MasterControl/Neuromancer wording, and scorer fairness in all 8. Verified: check.py, each self-test, audit/scripts/scorer_battery.py (1,701 probes, 0 flags), the SELMA and Dixie text solvers, and byte-identical generation for the scorer-only tasks (GLaDOS, SHODAN, Multivac). Earlier #22 runs used the pre-round-3 set."
+  "round3_note": "Round 3 (2026-10-08): fixes for the independent audit (audit/REPORT.md): Cerebex hidden-division key, SELMA date/order contradiction, TheDixieFlatline missing CORRECTION email, MasterControl/Neuromancer wording, and scorer fairness in all 8. Verified: check.py, each self-test, audit/scripts/scorer_battery.py (1,701 probes, 0 flags), the SELMA and Dixie text solvers, and byte-identical generation for the scorer-only tasks (GLaDOS, SHODAN, Multivac). Earlier #22 runs used the pre-round-3 set.",
+  "round3_1_note": "Round 3.1 (2026-10-08, issue #63): scorer-only fix to Multivac score(). Contexts, questions and answer keys are unchanged (byte-identical generate() output for every size x seeds 0-9). Probes for the 'ID: value' shapes were added to audit/scripts/scorer_battery.py for all 8 tasks (0 flags); no other scorer changed. Rows scored before this can be re-scored with run_eval.py --rescore FILE."
 }

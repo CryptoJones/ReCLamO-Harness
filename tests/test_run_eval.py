@@ -269,3 +269,74 @@ def test_main_rejects_unknown_size() -> None:
 def test_provenance_reports_the_frozen_commit() -> None:
     p = run_eval.provenance()
     assert set(p) == {"head", "frozen_commit", "harness_changed_since_frozen"}
+
+
+# --- re-scoring (issue #63) -------------------------------------------------------------
+
+
+def test_rescore_rows_records_old_and_new_scores() -> None:
+    gens = gens_with(fake_generator())
+    hit = _fake_row("Fake", "small", "rlm", 0, 0.0)
+    hit.update(answer="It is in Room 7.", truth="Room 7")
+    miss = _fake_row("Fake", "small", "plain", 1, 1.0)
+    miss.update(answer="Room 9", truth="Room 7")
+    unscored = _fake_row("Fake", "large", "plain", 0, None)
+    assert run_eval.rescore_rows([hit, miss, unscored], gens) == 2
+    assert (hit["old_score"], hit["new_score"], hit["score"], hit["exact"]) == (0.0, 1.0, 1.0, True)
+    assert (miss["old_score"], miss["new_score"], miss["exact"]) == (1.0, 0.0, False)
+    assert not hit["truth_changed"] and not miss["truth_changed"]
+    assert "old_score" not in unscored and unscored["score"] is None
+
+
+def test_rescore_rows_flags_a_changed_key_and_rescores_legacy_variants() -> None:
+    gens = gens_with(fake_generator())
+    row = _fake_row("Fake", "small", "plain", 0, 0.0)
+    row["truth"] = "Room 8"
+    row["variants"] = {
+        "thinking": {"score": 0.0, "seconds": 5.0, "answer": "Room 7", "stop_reason": "stop"},
+        "nothink": {"score": 0.0, "seconds": 9.0, "answer": "no idea", "stop_reason": "stop"},
+    }
+    assert run_eval.rescore_rows([row], gens) == 1
+    assert row["truth_changed"] is True
+    assert row["variants"]["thinking"]["old_score"] == 0.0
+    assert row["variants"]["thinking"]["score"] == 1.0
+    assert row["chosen"] == "thinking" and row["new_score"] == 1.0 and row["old_score"] == 0.0
+
+
+def test_main_rescore_fixes_the_issue_63_multivac_row(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    desc = "Documentation with 80% coverage"
+    truth = {"req_id": "R142", "status": "Pending", "description": desc}
+    row = _fake_row("Multivac", "small", "rlm", 2, 0.2)
+    row.update(answer="R142: Documentation with 80% coverage — Status: Pending, Priority: Low",
+               truth=truth)  # fmt: skip
+    src = tmp_path / "rows.json"
+    run_eval.write_rows(src, {"profile": "pluto"}, [row])
+    before = src.read_text()
+    assert run_eval.main(["--rescore", str(src)]) == 0
+    assert src.read_text() == before  # never in place
+    out = tmp_path / "rows.rescored.json"
+    data = json.loads(out.read_text())
+    new = data["rows"][0]
+    assert (new["old_score"], new["new_score"], new["exact"]) == (0.2, 1.0, True)
+    assert not new["truth_changed"]
+    assert data["meta"]["profile"] == "pluto" and data["meta"]["rescored"]["rows_changed"] == 1
+    assert (tmp_path / "rows.rescored.md").exists()
+    captured = capsys.readouterr()
+    assert "Multivac small rlm seed=2: 0.2 -> 1.0" in captured.err
+    assert "1 row(s) changed" in captured.out
+
+
+def test_rescore_rows_keeps_the_score_of_a_truncated_answer() -> None:
+    gens = gens_with(fake_generator())
+    row = _fake_row("Fake", "small", "plain", 0, 1.0)
+    row.update(answer="x" * run_eval.STORED_ANSWER_CHARS, truth="Room 7")  # Room 7 was cut off
+    assert run_eval.rescore_rows([row], gens) == 0
+    assert row["score"] == 1.0 and "new_score" not in row and "truncated" in row["rescore_skipped"]
+
+
+def test_main_rescore_refuses_to_overwrite_its_input(tmp_path: Path) -> None:
+    src = tmp_path / "rows.json"
+    run_eval.write_rows(src, {}, [])
+    assert run_eval.main(["--rescore", str(src), "--out", str(src)]) == 2
