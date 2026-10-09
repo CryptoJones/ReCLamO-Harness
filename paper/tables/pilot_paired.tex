@@ -1,0 +1,29 @@
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\caption{Paired comparisons on identical cells. \textbf{Preliminary pilot}: seeds 2, 3, $n{=}16$ cells per arm and size, round-3.1 grader. Not a test of any hypothesis. $b$ = cells only A got exact, $c$ = cells only B got exact; $p$ = McNemar's exact two-sided test on $(b, c)$. $\Delta$ = paired mean-score difference A$-$B with a bootstrap 95\% interval. Uncorrected for multiple comparisons.}
+\label{tab:pilot-paired}
+\begin{tabular}{lllrrrrl}
+\toprule
+Size & A & B & A ex. & B ex. & $b$/$c$ & $p$ & $\Delta$ mean [95\% CI] \\
+\midrule
+Small & Harness v0.1 & Plain 128K & 11/16 & 8/16 & 5/2 & 0.45 & $+0.15$ [-0.14, 0.42] \\
+ & Harness v0.1 & Plain 32K & 11/16 & 9/16 & 5/3 & 0.73 & $+0.11$ [-0.23, 0.42] \\
+ & Harness v0.2 128K & Plain 128K & 10/16 & 8/16 & 2/0 & 0.50 & $+0.13$ [0.01, 0.29] \\
+ & Harness v0.1 & Harness v0.2 128K & 11/16 & 10/16 & 3/2 & 1.00 & $+0.02$ [-0.23, 0.25] \\
+ & Harness v0.1 & Harness v0.2 32K & 11/16 & 10/16 & 1/0 & 1.00 & $+0.04$ [0.00, 0.11] \\
+\midrule
+Medium & Harness v0.1 & Plain 128K & 9/16 & 7/16 & 2/0 & 0.50 & $+0.14$ [0.03, 0.30] \\
+ & Harness v0.1 & Plain 32K & 9/16 & 0/16 & 9/0 & 0.004 & $+0.62$ [0.40, 0.83] \\
+ & Harness v0.2 128K & Plain 128K & 8/16 & 7/16 & 3/2 & 1.00 & $+0.09$ [-0.14, 0.33] \\
+ & Harness v0.1 & Harness v0.2 128K & 9/16 & 8/16 & 2/1 & 1.00 & $+0.05$ [-0.11, 0.24] \\
+ & Harness v0.1 & Harness v0.2 32K & 9/16 & 7/16 & 3/1 & 0.62 & $+0.12$ [-0.07, 0.34] \\
+\midrule
+Pooled & Harness v0.1 & Plain 128K & 20/32 & 15/32 & 7/2 & 0.18 & $+0.15$ [-0.01, 0.31] \\
+ & Harness v0.1 & Plain 32K & 20/32 & 9/32 & 14/3 & 0.01 & $+0.37$ [0.14, 0.57] \\
+ & Harness v0.2 128K & Plain 128K & 18/32 & 15/32 & 5/2 & 0.45 & $+0.11$ [-0.02, 0.25] \\
+ & Harness v0.1 & Harness v0.2 128K & 20/32 & 18/32 & 5/3 & 0.73 & $+0.03$ [-0.11, 0.18] \\
+ & Harness v0.1 & Harness v0.2 32K & 20/32 & 17/32 & 4/1 & 0.38 & $+0.08$ [-0.02, 0.20] \\
+\bottomrule
+\end{tabular}
+\end{table}

@@ -1,0 +1,22 @@
+\begin{table}[t]
+\centering\small
+\caption{Accuracy per arm and size. \textbf{Preliminary pilot}: seeds 2, 3, $n{=}16$ cells per arm and size, round-3.1 grader. Not a test of any hypothesis. Exact = score 1.0 under the task's own \texttt{score()}; a plain prompt that does not fit the window (DNF) scores 0. Intervals: Wilson 95\% for exact, bootstrap 95\% for the mean.}
+\label{tab:pilot-accuracy}
+\begin{tabular}{llrlrlr}
+\toprule
+Size & Arm & Exact & 95\% CI & Mean & 95\% CI & DNF \\
+\midrule
+Small & Plain 32K & 9/16 & [0.33, 0.77] & 0.60 & [0.37, 0.83] & 2 \\
+ & Plain 128K & 8/16 & [0.28, 0.72] & 0.56 & [0.34, 0.78] & 0 \\
+ & Harness v0.1 & 11/16 & [0.44, 0.86] & 0.71 & [0.49, 0.90] & 0 \\
+ & Harness v0.2 32K & 10/16 & [0.39, 0.82] & 0.68 & [0.45, 0.88] & 0 \\
+ & Harness v0.2 128K & 10/16 & [0.39, 0.82] & 0.69 & [0.48, 0.89] & 0 \\
+\midrule
+Medium & Plain 32K & 0/16 & [0.00, 0.19] & 0.00 & [0.00, 0.00] & 16 \\
+ & Plain 128K & 7/16 & [0.23, 0.67] & 0.47 & [0.24, 0.71] & 2 \\
+ & Harness v0.1 & 9/16 & [0.33, 0.77] & 0.62 & [0.39, 0.83] & 0 \\
+ & Harness v0.2 32K & 7/16 & [0.23, 0.67] & 0.49 & [0.27, 0.72] & 0 \\
+ & Harness v0.2 128K & 8/16 & [0.28, 0.72] & 0.57 & [0.34, 0.78] & 0 \\
+\bottomrule
+\end{tabular}
+\end{table}
