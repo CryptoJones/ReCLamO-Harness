@@ -29,6 +29,8 @@ recursion, batched sub-calls, limits, JSONL trajectories). What is new here is t
 Qwen tuning: `<think>` handling, the paper's "do not over-call" guidance, hard caps on
 sub-calls, and a prompt sized for the 32K of KV cache that stays resident on pluto.
 
+> **Evaluation test plan:** see [`evals/TEST-PLAN.md`](evals/TEST-PLAN.md) for what is measured, in what order, and how results are judged.
+
 ## Status
 
 **Pre-alpha, usable.** Work is tracked in epic
