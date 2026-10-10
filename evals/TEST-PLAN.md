@@ -77,6 +77,45 @@ the planning formula above follows SHODAN/GPT's derivation and our measured q.)
   toward 320 pairs (seeds 2–41) for the primary comparison at small and medium; large uses
   harness arms only.
 
+## 1a. Pre-registered hypotheses for the main grid (frozen 2026-10-09 12:35 CDT)
+
+Frozen before any seed 4–9 result was examined. Those runs started at 10:37 that day. Up to the
+freeze, only row counts were read, never scores. Every hypothesis below is judged against this
+text. Any change after the freeze is dated and labelled post hoc.
+
+**Grid (sampling: Qwen3 presets).** CJ, 2026-10-09 12:30: run the full grid at the current
+settings first, unchanged, as a comparison point, then repeat it with the model's own sampling
+(#69). The grid is:
+- 8 tasks × seeds 2–9 at small and medium on the four arms plain-32K, plain-128K,
+  harness v0.1 32K and harness v0.2 128K. Plain-32K runs small only, because no medium question
+  fits. Harness v0.2 32K ran on seeds 2–3 only, as a pilot;
+- 64 large questions on harness v0.1 and harness v0.2 128K.
+
+The grid then extends in rolling batches toward 320 pairs (section 1).
+
+- **H1 (primary, one per size).** At small and at medium, harness v0.1 and plain-128K differ in
+  exact-match accuracy on paired questions.
+  - Test: two-sided exact McNemar.
+  - Looks: at ≈ 107, 213 and 320 pairs, with **O'Brien–Fleming boundaries** (|z| > 3.0, 2.0,
+    1.96).
+  - This replaces the "Bonferroni or O'Brien–Fleming" choice in section 1. The decision is Dix's
+    recommendation and can be overridden only before the first look.
+  - At seeds 2–9 (64 pairs) no look is reached. That grid is reported as an estimate with
+    confidence intervals and no test of H1.
+- **H2 (secondary).** Harness v0.2 128K and harness v0.1 differ in exact-match accuracy at small
+  and at medium (two-sided exact McNemar, unadjusted, labelled secondary).
+- **H3 (secondary, delegation).** Harness v0.2 makes more `llm_query` sub-calls per question than
+  v0.1 (one-sided paired Wilcoxon signed-rank, per question).
+- **H4 (estimate, not a test).** At large size, where no plain arm fits, report completion rate
+  and exact-match accuracy with 95% intervals for both harness arms.
+- **H5 (secondary, sampling; #69).** For each arm, accuracy with the model's embedded sampling
+  (temp 1.0 / top_p 0.95 / top_k 20) differs from the Qwen3 presets on the same questions
+  (two-sided exact McNemar per arm, secondary). It also tests whether the H1 and H2 directions
+  hold under both samplings. The native-sampling grid goes to separate files and is never pooled
+  with the preset grid.
+
+Provider and transport errors are `not_run` and are excluded pairwise, not scored 0 (#56).
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
@@ -198,8 +237,9 @@ quantized by Unsloth and abliterated by Huihui.ai.
   - every Flash-Next run so far used Qwen3 model-card presets (root 0.6 / 0.95 / 20 / min_p 0;
     sub 0.7 / 0.8 / 20 / presence_penalty 1.0).
 
-  Add an ablation that runs the primary comparison with the model's own sampling defaults vs our
-  presets. Report which settings each published number used.
+  Decision (CJ, 2026-10-09 12:30): no mid-grid ablation. The full grid finishes on the presets.
+  Then the same grid is repeated with the model's own defaults (#69, H5 in section 1a). Report
+  which settings each published number used.
 - **Chat template and thinking switch:** verify that `chat_template_kwargs.enable_thinking` and
   `reasoning_effort` behave as assumed on qwen4exp (Strata's template). Record the template hash
   per run.
@@ -221,14 +261,16 @@ quantized by Unsloth and abliterated by Huihui.ai.
 
 ## 8. Order of work
 
-1. **Running now:** the main grid on seeds 4–9 (small, medium), then 64 large questions.
-2. **Section 2:** validity checks.
-3. **Section 0 instrumentation:** completion and outcome reporting, statistics, and logging
+1. **Running now:** the main grid on seeds 4–9 (small, medium), then 64 large questions, all on
+   the Qwen3 presets.
+2. **Next:** the same grid with qwen4exp's own sampling (#69).
+3. **Section 2:** validity checks.
+4. **Section 0 instrumentation:** completion and outcome reporting, statistics, and logging
    what each arm received.
-4. **Section 3.1:** the v0.1 vs v0.2 decomposition.
-5. **Section 4.1:** oracle interventions, and section 6 baselines (retrieval).
-6. **Section 5 coverage:** unanswerable, then the size sweep, then paraphrases, then the rest.
-7. **Section 6a:** base vs fine-tuned 8B under native conditions (local lower-bit quant, or RunPod after the gate opens).
-8. **RunPod:** the dispatcher/thinker pairing, after CJ's go.
+5. **Section 3.1:** the v0.1 vs v0.2 decomposition.
+6. **Section 4.1:** oracle interventions, and section 6 baselines (retrieval).
+7. **Section 5 coverage:** unanswerable, then the size sweep, then paraphrases, then the rest.
+8. **Section 6a:** base vs fine-tuned 8B under native conditions (local lower-bit quant, or RunPod after the gate opens).
+9. **RunPod:** the dispatcher/thinker pairing, after CJ's go.
 
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*
