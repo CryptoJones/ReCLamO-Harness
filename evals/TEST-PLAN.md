@@ -116,6 +116,12 @@ The grid then extends in rolling batches toward 320 pairs (section 1).
 
 Provider and transport errors are `not_run` and are excluded pairwise, not scored 0 (#56).
 
+**Scoring clarification (CJ, 2026-10-09 23:21, after the freeze but before any score was examined).**
+- A request that Strata rejects with HTTP 400 `malformed tool call` is a **model failure, not a provider error**: the model wrote tool-call-shaped text instead of a code fence (#72).
+- Such a row scores **0**, with failure type `malformed_tool_call`.
+- Every analysis that contains such rows is also reported with them excluded, as a sensitivity check.
+- As of seed 5: two rows, both harness v0.2 128K, Multivac, small (seeds 4 and 5).
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
