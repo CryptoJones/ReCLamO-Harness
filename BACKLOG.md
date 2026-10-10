@@ -9,9 +9,12 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 - [x] Per-role endpoints: small planner (root) + Flash-Next reader (sub-calls) ([#36](https://github.com/CryptoJones/ReCLamO-Harness/issues/36)) — PR [#44](https://github.com/CryptoJones/ReCLamO-Harness/pull/44)
 - [x] Compatibility mode for mit-oasys/rlm-qwen3-8b-v0.1 as planner (upstream rlm scaffold/prompt) ([#43](https://github.com/CryptoJones/ReCLamO-Harness/issues/43)) — PR [#45](https://github.com/CryptoJones/ReCLamO-Harness/pull/45)
+- [ ] LongBench Pro loader: evals/longbenchpro with held-out split, MC/open tags, exam-hash exclusion ([#75](https://github.com/CryptoJones/ReCLamO-Harness/issues/75)) — queued after the preset grid
+- [ ] Reproduce MIT's RLM-Qwen3-8B gain natively: base vs fine-tuned Qwen3-8B, 8B reader, LongBench Pro ([#74](https://github.com/CryptoJones/ReCLamO-Harness/issues/74)) — queued
+- [ ] Teacher gate: Flash-Next as planner, yield of correct usable runs vs base Qwen3-8B ([#76](https://github.com/CryptoJones/ReCLamO-Harness/issues/76)) — queued
 - [ ] Practice task suite (never the exam): diverse long-context generators for training data ([#37](https://github.com/CryptoJones/ReCLamO-Harness/issues/37))
 - [ ] Teacher trajectories: collect and filter correct RLM runs into an SFT dataset ([#38](https://github.com/CryptoJones/ReCLamO-Harness/issues/38))
-- [ ] LoRA SFT of Qwen3-8B on RunPod ([#39](https://github.com/CryptoJones/ReCLamO-Harness/issues/39))
+- [ ] LoRA SFT of Qwen3-8B on RunPod ([#39](https://github.com/CryptoJones/ReCLamO-Harness/issues/39)) — on hold: budget is $0 (epic decision 8), venue TBD
 - [ ] Host the trained planner locally and add a profile ([#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40))
 - [ ] Final exam: trained planner vs current harness vs plain model on the frozen independent tests ([#41](https://github.com/CryptoJones/ReCLamO-Harness/issues/41))
 
