@@ -122,6 +122,77 @@ Provider and transport errors are `not_run` and are excluded pairwise, not score
 - Every analysis that contains such rows is also reported with them excluded, as a sensitivity check.
 - As of seed 5: two rows, both harness v0.2 128K, Multivac, small (seeds 4 and 5).
 
+## 1b. Amendment to the main-grid plan (2026-10-10 01:45 CDT; epic #80)
+
+Dated and appended; section 1a is not rewritten. Written before any interim look and before any
+seed 4–9 score was examined (only row counts and error rows have been read). Decisions from CJ
+on 2026-10-10 ("Lets add all four to the plan"), after a 10-lane roundtable review.
+
+**Correction: the H1 stopping boundaries.**
+- Section 1a gave "O'Brien–Fleming boundaries (|z| > 3.0, 2.0, 1.96)". Those are **not**
+  O'Brien–Fleming. By simulation (4M draws, 3 equally spaced looks), that rule rejects a true
+  null 7.4% of the time, not 5%.
+- **Corrected rule:** O'Brien–Fleming for K = 3 equally spaced looks, two-sided α = .05:
+  **|z| > 3.471, 2.454, 2.004** at 1/3, 2/3 and all of the confirmatory pairs (c = 2.004 ×
+  √(3/k)).
+- z is computed from the discordant pairs as (b − c)/√(b + c). The exact McNemar p-value is
+  reported alongside it at every look.
+
+**Confirmatory set.**
+- Seeds 2–3 were seen before the H1–H5 freeze, so they are **exploratory** and are never part of
+  a confirmatory test.
+- **Confirmatory = seeds 4 onward.** H1's 320 confirmatory pairs per size are seeds 4–43
+  (8 tasks × 40 seeds).
+- The looks fall after seed 17 (112 pairs), seed 30 (216) and seed 43 (320). If a look crosses a
+  boundary, H1 stops for that size and the look is recorded here.
+
+**H1 is run to 320 pairs** (#82) on its two arms only: harness v0.1 32K and plain-128K, at small
+and medium, seeds 10–43, from the pinned code d816814.
+
+**Multiplicity.**
+- H1-small and H1-medium are two separate primary questions, one per input size, each tested at
+  its own α = .05 with the boundaries above. No claim combines them.
+- Holm-adjusted p-values across the pair are reported as a sensitivity check.
+- H2–H7 are secondary and labelled so.
+
+**H2 renamed.** H2 is a **configuration comparison** (v0.2 128K vs v0.1 32K). It changes prompt,
+limits and window together, so it cannot attribute a difference to delegation.
+
+**New secondary hypotheses** (paired, seeds 4–9, small/medium/large; estimates with
+task-clustered 95% CIs, exact McNemar labelled secondary):
+- **H6 (map-reduce, #84):** fixed-chunk map-reduce (same model as reader, deterministic prompts,
+  one aggregation call) differs from harness v0.1 in exact-match accuracy. At large size this is
+  the harness's only comparator.
+- **H7 (REPL-only, #83):** harness v0.1 with `llm_query` disabled and not advertised differs from
+  harness v0.1. A REPL-only score close to the harness score would mean the gain comes from code
+  in a REPL, not from recursion.
+- Both arms run from a separate checkout at a newer commit, recorded per row. The harness core is
+  unchanged.
+
+**Analysis specification** (#85; built on fixtures and not run on confirmatory data before the
+first look):
+- **Clustering:** with 8 tasks, the task is a cluster.
+  - Alongside McNemar, report a task-clustered paired bootstrap CI (resample tasks, then
+    questions) and a GLMM (logit, arm fixed effect, task random intercept).
+  - Report leave-one-task-out estimates and the minimum detectable effect at each n.
+- **Breakdowns:** per task, per generator author, and by evidence position (where the deciding
+  fact and its correction sit).
+- **Noise floor (A/A):** at small, plain-32K and plain-128K see identical input. Their
+  discordance rate is reported as an A/A noise floor.
+- **Cost and latency** are central results: per-arm seconds (p50/p95), prompt and completion
+  tokens, sub-calls and turns.
+- **Failure taxonomy:** answered, forced finish, turn cap, time limit, error limit, context
+  overflow, `malformed_tool_call`, `not_run`.
+
+**Construct-validity check (#86).**
+- Per generator, a deterministic non-LLM shortcut solver (e.g. last-mentioned candidate, most
+  frequent candidate, regex on the question's key terms), written blind to the answer keys.
+- It is scored on seeds 4–9. Any generator where it scores high is reported as measuring search,
+  not multi-hop reasoning.
+
+**Framing (CJ, 2026-10-10: arXiv only).** The paper is a **transfer study**: one model, one serving
+stack, these tasks. Only the LongBench Pro reproduction (#74) is called a replication.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
