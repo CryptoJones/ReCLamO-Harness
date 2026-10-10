@@ -5,6 +5,19 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ## Open
 
+### Epic: arXiv transfer-study paper — powered H1, non-recursive baselines, honest analysis ([#80](https://github.com/CryptoJones/ReCLamO-Harness/issues/80))
+
+- [ ] TEST-PLAN amendment: confirmatory seeds 4–43, H1 to 320, H6/H7 baselines, clustered analysis ([#81](https://github.com/CryptoJones/ReCLamO-Harness/issues/81))
+- [ ] Analysis: clustered stats, per-task/author/position, cost/latency, failure taxonomy in make_tables.py ([#85](https://github.com/CryptoJones/ReCLamO-Harness/issues/85))
+- [ ] Construct validity: non-LLM shortcut solver per generator ([#86](https://github.com/CryptoJones/ReCLamO-Harness/issues/86))
+- [ ] Provenance record for the system under test ([#87](https://github.com/CryptoJones/ReCLamO-Harness/issues/87))
+- [ ] Extend H1 to 320 pairs: seeds 10–43, harness v0.1 32K + plain-128K ([#82](https://github.com/CryptoJones/ReCLamO-Harness/issues/82))
+- [ ] Repeat the full main grid with qwen4exp's own sampling ([#69](https://github.com/CryptoJones/ReCLamO-Harness/issues/69)) — also listed under Evaluation
+- [ ] REPL-only ablation arm ([#83](https://github.com/CryptoJones/ReCLamO-Harness/issues/83))
+- [ ] Fixed-chunk map-reduce baseline arm ([#84](https://github.com/CryptoJones/ReCLamO-Harness/issues/84))
+- [ ] Strata 400 fix ([#72](https://github.com/CryptoJones/ReCLamO-Harness/issues/72)) — also listed under harness bugs
+- [ ] Paper: reframe as a transfer study; confirmatory seeds 4–43; arXiv-only ([#88](https://github.com/CryptoJones/ReCLamO-Harness/issues/88))
+
 ### Epic: Trained small planner — Qwen3-8B LoRA as the RLM root, Flash-Next as the reader ([#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42))
 
 - [x] Per-role endpoints: small planner (root) + Flash-Next reader (sub-calls) ([#36](https://github.com/CryptoJones/ReCLamO-Harness/issues/36)) — PR [#44](https://github.com/CryptoJones/ReCLamO-Harness/pull/44)
