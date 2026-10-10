@@ -465,6 +465,7 @@ REPL, never written to a trajectory, and never included in an error message.
 - `evals/independent/run_eval.py` — the frozen independent eval (#22): the same rlm and
   plain modes on the eight roundtable-authored tasks, scored by each task's own
   `score()`; resumable, with a markdown summary.
+- `evals/longbenchpro/longbenchpro.py` — the LongBench Pro loader (#75), described below.
 
 ```sh
 uv run python examples/needle.py --profile pluto --lines 1000000
@@ -476,6 +477,61 @@ uv run python examples/nested.py --profile pluto --max-depth 2 --delegate --max-
 
 Live tests (`uv run pytest -m live`) run `ping`, a thinking round trip and a
 50K-line needle against pluto; they are skipped by default and in CI.
+
+### LongBench Pro (practice data and a held-out set)
+
+[`caskcsg/LongBench-Pro`](https://huggingface.co/datasets/caskcsg/LongBench-Pro)
+(Apache-2.0, arXiv 2601.02872) has 1,500 items on real documents: 11 primary and 25
+secondary tasks, half English and half Chinese, and six length buckets from 8k to 256k
+Qwen tokens. It ships as one `test` split. The loader cuts it into three splits for the
+trained-planner epic ([#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42)):
+
+| Split | Use | Items |
+|---|---|---|
+| `practice` | training data | 1,110 |
+| `practice-dev` | recipe and checkpoint selection | 126 |
+| `held-out` | evaluation only | 264 |
+
+- **Splits are fixed.** No random seed is involved: the split comes from a salted sha256
+  of an item id. The 1,500 items have only 1,076 distinct contexts, and one source text
+  often recurs across length buckets. Items whose contexts are equal, or share a
+  normalised line of at least 120 characters, form one document group (577 in all). The
+  whole group lands in one split, keyed by its smallest id, so no document is split
+  across practice and held-out.
+- **MC vs open is tagged per item.** An item is `mc` when its answer is one option
+  letter that the question lists, and `mc-multi` when the question lets the model pick
+  several letters (any non-empty subset). Everything else is `open`. The totals are 203
+  `mc`, 103 `mc-multi` and 1,194 `open`. T3 and T11 are MC, but 83 of their 240 items
+  (20 in T3, 63 in T11) are multi-select, which a random guess almost never passes, and
+  T11 has one open item. T10 also has 62 MC items. Every item also carries `chance`, the
+  exact-match rate of a uniform guess.
+- **The exam is excluded.** `exam_hashes.json` holds the sha256 of every active
+  `evals/independent` document (8 tasks, 3 sizes, seeds 0-99), after NFKC, casefolding
+  and whitespace collapse. Any item whose context or question matches is refused,
+  whatever its split. None match today, as expected for synthetic exam documents. A test
+  fails if an exam generator changes and the hashes were not rebuilt.
+- **Scoring follows the upstream metrics**, reimplemented here: first-line accuracy,
+  SubEM, F1, pairwise order and NDCG, chosen per secondary task. T4 summaries need an
+  embedding model, so they are left unscored and filtered out by default.
+  `instance(item)` returns a `bench.Instance` whose task is registered in `bench.TASKS`,
+  so `bench.run_rlm` and `bench.run_plain` run it unchanged.
+
+The data (530 MB) is downloaded with the standard library at a pinned revision and
+checked against its sha256. No new dependency is needed. Tests use a small synthetic
+fixture and never touch the network.
+
+```sh
+uv run python evals/longbenchpro/longbenchpro.py download   # to ~/.cache/reclamo/longbenchpro/
+uv run python evals/longbenchpro/longbenchpro.py stats      # per task x kind x split
+uv run python evals/longbenchpro/longbenchpro.py stats --split held-out --max-bucket 16k
+uv run python evals/longbenchpro/longbenchpro.py exam-hashes  # after any exam generator change
+```
+
+`stats` reports counts, median characters, and the median, p90 and max token estimate
+(`bench.estimate_tokens`). The estimate overcounts English and undercounts Chinese, so
+it also counts items by the dataset's own Qwen-token bucket. For a 16K-32K student
+window, the held-out split has 82 scorable items in the 8k and 16k buckets, and 121 up
+to 32k.
 
 ## Results
 
