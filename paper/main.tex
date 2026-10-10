@@ -420,8 +420,9 @@ beyond the resident cache at reduced prefill speed. The same model serves as
 planner and reader. Root turns use thinking; sub-calls do not. Sampling follows the
 Qwen3 model-card presets (root: temperature 0.6, top-$p$ 0.95, top-$k$ 20, min-$p$ 0;
 sub-calls: 0.7, 0.8, 20, presence penalty 1.0), not the defaults embedded in the GGUF
-(temperature 1.0, top-$p$ 0.95, top-$k$ 20); an ablation with the embedded defaults is
-planned.
+(temperature 1.0, top-$p$ 0.95, top-$k$ 20). The full grid runs on the presets first.
+The same grid is then repeated with the embedded defaults, and its results are kept
+separate (H5).
 
 \subsection{Arms}
 All arms answer the same questions (Table~\ref{tab:arms}). ``32K'' is 32,768
@@ -492,26 +493,29 @@ row files; none is typed by hand.
 \subsection{Hypotheses}
 \label{sec:hypotheses}
 The test plan requires each phase's hypothesis, arms, sample size, metric, test and
-stopping rule to be written down before the phase runs. The hypotheses below are
-the draft set for the main grid. \TODO{Freeze them in \code{evals/TEST-PLAN.md}
-before any seed-4--9 result is examined, and record the commit here. The seed-4--9
-runs started on 2026-10-09 before this list was frozen; the freeze must precede
-looking at their results, not their collection.}
+stopping rule to be written down before the phase runs. The hypotheses below were
+frozen in \code{evals/TEST-PLAN.md} (section 1a, commit \code{692a62a}) on 2026-10-09,
+before any seed-4--9 score was examined. Those runs had started earlier that day, so the
+freeze precedes looking at their results, though not their collection.
 
 \begin{description}[style=unboxed,leftmargin=1.5em,font=\normalfont\bfseries]
 \item[H1 (primary; harness vs plain, within the window).] At small and at medium
   size, exact-match accuracy of Harness v0.1 differs from Plain 128K on paired
   questions. Two-sided exact McNemar test with three looks at about 107, 213 and 320
-  pairs; reject only at $p \le 0.0167$ at any look (Bonferroni), or equivalently with
-  O'Brien--Fleming boundaries ($|z| > 3.0, 2.0, 1.96$). \TODO{Fix which of the two
-  boundary rules is used.}
+  pairs, using O'Brien--Fleming boundaries ($|z| > 3.0, 2.0, 1.96$). At 64 pairs
+  (seeds 2--9) no look is reached, so that grid reports estimates with intervals and no
+  test of H1.
 \item[H2 (secondary; v0.2 vs v0.1).] Harness v0.2 128K and Harness v0.1 differ in
   exact-match accuracy at small and at medium size (two-sided McNemar).
 \item[H3 (secondary; delegation).] Harness v0.2 makes more sub-calls per question than v0.1
-  (paired Wilcoxon signed-rank on sub-calls per cell). \TODO{Confirm test.}
+  (one-sided paired Wilcoxon signed-rank on sub-calls per question).
 \item[H4 (beyond the window).] At large size, where no plain arm fits, both
   harness arms report completion and exact-match accuracy with intervals; no
   comparison with plain is possible. This is an estimate, not a test.
+\item[H5 (secondary; sampling).] For each arm, accuracy with the model's embedded sampling
+  defaults differs from accuracy with the Qwen3 presets on the same questions (two-sided
+  exact McNemar per arm). H5 also asks whether the directions of H1 and H2 hold under
+  both settings. The two grids are never pooled.
 \end{description}
 
 Ablations that attribute any H2 difference to the prompt, the turn cap or the REPL
@@ -762,7 +766,8 @@ conditions (32K window, 20,000-character REPL outputs, Qwen3-8B reader, with a
 Flash-Next-reader variant as a separate arm), checked first on the paper's own tasks
 against its published numbers. This is also the same-architecture anchor that the main
 model cannot provide. (8) On rented GPUs: planner/reader pairings of different sizes.
-Also planned: an ablation with the model's embedded sampling defaults, at least eight
+Also planned: the repeat of the main grid with the model's embedded sampling defaults
+(H5), at least eight
 more task generators from outside models, and a frontier model as a ceiling. 
 
 % ===========================================================================
