@@ -40,7 +40,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 ### Write-up
 
-- [ ] Draft arXiv paper: replication-and-measurement study, results pending the main grid ([#66](https://github.com/CryptoJones/ReCLamO-Harness/issues/66))
+- [x] Draft arXiv paper: replication-and-measurement study, results pending the main grid ([#66](https://github.com/CryptoJones/ReCLamO-Harness/issues/66)) — PR [#68](https://github.com/CryptoJones/ReCLamO-Harness/pull/68): scaffold only, results PENDING
 
 ## Done
 
