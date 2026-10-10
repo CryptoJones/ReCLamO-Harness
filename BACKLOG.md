@@ -9,7 +9,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 - [x] Per-role endpoints: small planner (root) + Flash-Next reader (sub-calls) ([#36](https://github.com/CryptoJones/ReCLamO-Harness/issues/36)) — PR [#44](https://github.com/CryptoJones/ReCLamO-Harness/pull/44)
 - [x] Compatibility mode for mit-oasys/rlm-qwen3-8b-v0.1 as planner (upstream rlm scaffold/prompt) ([#43](https://github.com/CryptoJones/ReCLamO-Harness/issues/43)) — PR [#45](https://github.com/CryptoJones/ReCLamO-Harness/pull/45)
-- [ ] LongBench Pro loader: evals/longbenchpro with held-out split, MC/open tags, exam-hash exclusion ([#75](https://github.com/CryptoJones/ReCLamO-Harness/issues/75)) — queued after the preset grid
+- [x] LongBench Pro loader: evals/longbenchpro with held-out split, MC/open tags, exam-hash exclusion ([#75](https://github.com/CryptoJones/ReCLamO-Harness/issues/75)) — PR [#78](https://github.com/CryptoJones/ReCLamO-Harness/pull/78): 1,500 items; splits grouped by shared document (practice 1,110 / dev 126 / held-out 264); MC tagged per item incl. multi-select
 - [ ] Reproduce MIT's RLM-Qwen3-8B gain natively: base vs fine-tuned Qwen3-8B, 8B reader, LongBench Pro ([#74](https://github.com/CryptoJones/ReCLamO-Harness/issues/74)) — queued
 - [ ] Teacher gate: Flash-Next as planner, yield of correct usable runs vs base Qwen3-8B ([#76](https://github.com/CryptoJones/ReCLamO-Harness/issues/76)) — queued
 - [ ] Practice task suite (never the exam): diverse long-context generators for training data ([#37](https://github.com/CryptoJones/ReCLamO-Harness/issues/37))
