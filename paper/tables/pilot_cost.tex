@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{4pt}
+\caption{Completion, delegation, cost and latency over attempted rows. \textbf{Preliminary pilot}: seeds 2, 3, $n{=}16$ cells per arm and size, round-3.1 grader. Not a test of any hypothesis. Ans.\ = the model finished on its own (\texttt{FINAL}, \texttt{FINAL\_VAR}, the answer dict, or a plain reply that stopped normally); Lim.\ = turn cap, time limit, error limit, context overflow or output-length cap (the harness then takes a forced finish). Deleg.\ = rows with at least one sub-call; Sub-calls and Turns are means per attempted row. Tokens include sub-calls. Seconds are wall clock on shared, serial hardware.}
+\label{tab:pilot-cost}
+\begin{tabular}{llrrrrrrr}
+\toprule
+Size & Arm & Ans. & Lim. & Deleg. & Sub-calls & Turns & Med.\ tokens & Med./p95 s \\
+\midrule
+Small & Plain 32K & 14/14 & 0/14 & -- & -- & -- & 17{,}870 & 113/226 \\
+ & Plain 128K & 16/16 & 0/16 & -- & -- & -- & 18{,}873 & 134/263 \\
+ & Harness v0.1 & 12/16 & 4/16 & 3/16 & 0.75 & 13.50 & 55{,}137 & 128/515 \\
+ & Harness v0.2 32K & 14/16 & 2/16 & 10/16 & 1.62 & 12.56 & 43{,}277 & 206/1{,}201 \\
+ & Harness v0.2 128K & 16/16 & 0/16 & 14/16 & 2.44 & 12.25 & 67{,}688 & 252/1{,}856 \\
+\midrule
+Medium & Plain 32K & 0/0 & 0/0 & -- & -- & -- & -- & --/-- \\
+ & Plain 128K & 12/14 & 2/14 & -- & -- & -- & 88{,}699 & 449/607 \\
+ & Harness v0.1 & 10/16 & 6/16 & 4/16 & 0.38 & 14.75 & 103{,}628 & 236/459 \\
+ & Harness v0.2 32K & 14/16 & 2/16 & 7/16 & 1.44 & 16.50 & 100{,}321 & 371/2{,}739 \\
+ & Harness v0.2 128K & 15/16 & 1/16 & 10/16 & 2.06 & 16.75 & 132{,}842 & 374/3{,}245 \\
+\bottomrule
+\end{tabular}
+\end{table}

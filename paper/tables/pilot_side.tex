@@ -1,0 +1,23 @@
+\begin{table}[t]
+\centering\small
+\caption{\textbf{Preliminary} pilot side runs on the round-3 task set (seeds 0--1 at small and medium, seed 0 at large; the Llama run is GLaDOS only), with harness v0.1 settings. Their plain rows still used the best-of-2 rule of Section~\ref{sec:lessons}, so plain is an upper bound. Exact / cells. Observations, not tests.}
+\label{tab:pilot-side}
+\begin{tabular}{llrr}
+\toprule
+Setup & Size & Harness exact & Plain exact (best-of-2) \\
+\midrule
+RLM-Qwen3-8B planner & small & 1/16 & -- \\
+ & medium & 4/16 & -- \\
+ & large & 0/8 & -- \\
+\midrule
+Laguna S 2.1 & small & 5/16 & 4/16 \\
+ & medium & 2/16 & 2/16 (2 DNF) \\
+ & large & 3/8 & -- \\
+\midrule
+Llama 3.3 70B (GLaDOS only) & small & 0/2 & 0/2 \\
+ & medium & 0/2 & 0/2 (2 DNF) \\
+\midrule
+Laguna, parser-fix reruns & 24 cells & 5/24 before, 6/24 after & -- \\
+\bottomrule
+\end{tabular}
+\end{table}

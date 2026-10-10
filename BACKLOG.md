@@ -38,6 +38,10 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] Root prompt discourages delegation; align with the paper's main prompt ([#59](https://github.com/CryptoJones/ReCLamO-Harness/issues/59))
 - [ ] v0.2 defaults: remove self-imposed limits, add `pluto-long`, pluto concurrency 2 ([#61](https://github.com/CryptoJones/ReCLamO-Harness/issues/61))
 
+### Write-up
+
+- [ ] Draft arXiv paper: replication-and-measurement study, results pending the main grid ([#66](https://github.com/CryptoJones/ReCLamO-Harness/issues/66))
+
 ## Done
 
 ### Follow-ups from v0.1
