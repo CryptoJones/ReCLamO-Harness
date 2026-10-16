@@ -193,6 +193,38 @@ first look):
 **Framing (CJ, 2026-10-10: arXiv only).** The paper is a **transfer study**: one model, one serving
 stack, these tasks. Only the LongBench Pro reproduction (#74) is called a replication.
 
+## 1c. H1 interim looks: recorded 2026-10-16 03:50 CDT (H1 stopped for both sizes)
+
+Dated and appended; sections 1a and 1b are not rewritten. Computed from `runs/exp-v02/h-v01-32k.json`
+(harness v0.1 32K) and `runs/exp-v02/plain-131k.json` (plain-128K), pinned code d816814, 0 error rows
+in either file, with `exact()` (score ≥ 1.0) and `mcnemar_exact()` from `paper/analysis/make_tables.py`.
+Pairs are matched on (task, size, seed), confirmatory seeds 4 onward, 8 tasks per seed. b = harness
+exact and plain not; c = plain exact and harness not; z = (b − c)/√(b + c); positive z favours the
+harness. Boundaries from section 1b: |z| > 3.471 (112 pairs), 2.454 (216), 2.004 (320).
+
+| Look | Size | n | Harness exact | Plain exact | b | c | z | Exact McNemar p | Boundary | Result |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 17 | small | 112 | 65 | 49 | 32 | 16 | +2.309 | .0293 | 3.471 | inside: continue |
+| seed 17 | medium | 112 | 51 | 32 | 24 | 5 | +3.528 | .0005 | 3.471 | **crosses: stop** |
+| seed 30 | small | 216 | 125 | 94 | 60 | 29 | +3.286 | .0013 | 2.454 | **crosses: stop** |
+| seed 30 | medium | 216 | 104 | 68 | 49 | 13 | +4.572 | < .0001 | 2.454 | crosses (supplementary; see deviation) |
+
+**Protocol deviation.** The seed-17 look was due when seed 17 finished (2026-10-15 ~00:00 CDT) and
+was not performed; the grid ran on to seed 30 before any look was computed (2026-10-16 03:45 CDT,
+during a pluto pause). Nobody read a score in between: only row counts and error rows were examined.
+Consequences, applied as the pre-registered rule says:
+
+- **H1-medium stopped at the first look** (112 pairs, z = +3.528 > 3.471, p = .0005). That is its
+  confirmatory result. The medium rows for seeds 18–30 were collected after the stopping point; they
+  are reported as a supplementary estimate (the seed-30 row above), never as the confirmatory test.
+- **H1-small stopped at the second look** (216 pairs, z = +3.286 > 2.454, p = .0013), as planned.
+- Holm across the two primaries: both adjusted p-values are below .05.
+- The grid was stopped mid seed 31 (3 plain-128K and 2 harness small rows exist for seed 31). Those
+  rows and any later seeds are not part of H1. Seeds 31–43 are **not run** for H1; if they are run
+  later, it is for estimation only and is recorded here first.
+- The task-clustered bootstrap, GLMM and leave-one-task-out analyses (#85) are reported at each
+  size's stopping look.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
