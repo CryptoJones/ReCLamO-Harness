@@ -17,6 +17,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] Fixed-chunk map-reduce baseline arm ([#84](https://github.com/CryptoJones/ReCLamO-Harness/issues/84))
 - [ ] Strata 400 fix ([#72](https://github.com/CryptoJones/ReCLamO-Harness/issues/72)) — also listed under harness bugs
 - [ ] Human verification: CJ hand-checks answer keys and blind-grades a sample — **not before 2026-10-18** ([#90](https://github.com/CryptoJones/ReCLamO-Harness/issues/90))
+- [ ] **Scorer verbosity bias**: round-3 hedge rules zero out correct plain answers (MasterControl 54/54, Neuromancer 22/41, SELMA 7/10); H1 does not survive symmetric rescoring — #90 first, dated amendment, rescore into new files, baselines wait ([#95](https://github.com/CryptoJones/ReCLamO-Harness/issues/95))
 - [ ] Paper: reframe as a transfer study; confirmatory seeds 4–43; arXiv-only ([#88](https://github.com/CryptoJones/ReCLamO-Harness/issues/88))
 
 ### Epic: Trained small planner — Qwen3-8B LoRA as the RLM root, Flash-Next as the reader ([#42](https://github.com/CryptoJones/ReCLamO-Harness/issues/42))
