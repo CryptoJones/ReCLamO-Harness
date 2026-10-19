@@ -29,6 +29,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] Practice task suite (never the exam): diverse long-context generators for training data ([#37](https://github.com/CryptoJones/ReCLamO-Harness/issues/37))
 - [ ] Teacher trajectories: collect and filter correct RLM runs into an SFT dataset ([#38](https://github.com/CryptoJones/ReCLamO-Harness/issues/38))
 - [ ] LoRA SFT of Qwen3-8B on RunPod ([#39](https://github.com/CryptoJones/ReCLamO-Harness/issues/39)) — on hold: budget is $0 (epic decision 8), venue TBD
+- [ ] RL stage after SFT: GRPO on edge-filtered practice tasks, deterministic scorer as reward — post-paper, after #86 ([#93](https://github.com/CryptoJones/ReCLamO-Harness/issues/93))
 - [ ] Host the trained planner locally and add a profile ([#40](https://github.com/CryptoJones/ReCLamO-Harness/issues/40))
 - [ ] Final exam: trained planner vs current harness vs plain model on the frozen independent tests ([#41](https://github.com/CryptoJones/ReCLamO-Harness/issues/41))
 
