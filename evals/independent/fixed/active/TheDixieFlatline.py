@@ -213,17 +213,148 @@ def generate(seed: int, size: str) -> dict:
     }
 
 
-def score(answer_text: str, truth: str) -> float:
-    """Robust scorer for TheDixieFlatline.
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
 
-    - 1.0 when the answer unambiguously names the final physical location
-      (case-insensitive, tolerant of formatting, prose wrapping, quotes, etc.).
-    - 0.3 when the answer hedges between two candidate locations.
-    - 0.0 when the answer names a different location or nothing of substance.
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+# --- round-4 lane helpers (this file only; same text in every round-4 scorer that uses them) ---
+_R4_ALT_ANY = _re4.compile(
+    r"\b(?:possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b",
+    _re4.IGNORECASE,
+)
+_R4_ALT_LINK = _re4.compile(r"\b(?:or|either|alternatively)\b", _re4.IGNORECASE)
+
+
+def _r4_hedged(segment: str, spans) -> bool:
+    """Rule 3, read strictly: at least two DISTINCT candidates in the segment AND the
+    alternative is offered between them ("X or Y", "either X or Y"), or the segment declares
+    uncertainty outright ("possibly", "cannot be determined"). A bare "or" elsewhere in the
+    segment ("unassigns or reassigns", "denied or withdrawn") is not a hedge.
+    spans: iterable of (start, end, key) for candidate occurrences inside segment."""
+    spans = list(spans)
+    keys = {k for _, _, k in spans}
+    if len(keys) < 2 or not _r4_explicit_alternative(segment):
+        return False
+    if _R4_ALT_ANY.search(segment):
+        return True
+    ordered = sorted(spans, key=lambda x: (x[0], x[1]))
+    for (s1, e1, k1), (s2, e2, k2) in zip(ordered, ordered[1:]):
+        if k1 != k2 and s2 - e1 <= 80 and _R4_ALT_LINK.search(segment[e1:s2]):
+            return True
+    return False
+
+
+def _r4_lead(text: str) -> str:
+    """Answer-first layout: a short standalone first line ("**Unassigned**", "**Room 130**",
+    "**$4,311.31**") followed by the explanation. Returned only when the text has more than
+    one paragraph, the first paragraph is a single line of at most 80 chars, and no answer
+    marker ("Final answer", "Therefore", ...) opens a later line (that later line is then the
+    final statement, not the lead); else ""."""
+    t = text.strip()
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    if len(paras) < 2:
+        return ""
+    first = paras[0].strip()
+    if "\n" in first or len(first) > 80:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None and last.start() >= len(first):
+        return ""
+    return first
+# --- end round-4 lane helpers ---
+
+
+_R4_LOCATION = _re4.compile(
+    r"\b(?:server room c|room \d{3}|the vault|vault|datacenter alpha|datacenter beta|"
+    r"offsite storage|basement level 1|executive suite|the annex|annex)\b"
+)
+
+
+def _r4_locations(text_low: str):
+    """Occurrences of the generator's location names in lower-cased text; key drops 'the '."""
+    out = []
+    for m in _R4_LOCATION.finditer(text_low):
+        k = m.group(0)
+        if k.startswith("the "):
+            k = k[4:]
+        out.append((m.start(), m.end(), k))
+    return out
+
+
+def score(answer_text: str, truth: str) -> float:
+    """Round-4 scorer for TheDixieFlatline: grades the FINAL STATEMENT.
+
+    - 1.0 when the final location is named (case-insensitive, tolerant of formatting, prose,
+      quotes; "The Annex" also as "Annex") and the final segment does not pick another one.
+    - 0.3 when the final segment offers an explicit alternative between two locations
+      ("either Room 118 or Room 130").
+    - 0.0 when the truth is absent or the final statement names only other locations.
+    "moved from X to Y" is not a hedge: the destination is the answer.
     """
     if not isinstance(answer_text, str) or not answer_text.strip():
         return 0.0
-    ans_clean = re.sub(r"[^\w\s]", " ", answer_text.lower())
+    norm = _r4_normalize(answer_text)
+    ans_clean = re.sub(r"[^\w\s]", " ", norm.lower())
     ans_clean = re.sub(r"\s+", " ", ans_clean).strip()
     tru_clean = re.sub(r"[^\w\s]", " ", truth.lower())
     tru_clean = re.sub(r"\s+", " ", tru_clean).strip()
@@ -236,19 +367,22 @@ def score(answer_text: str, truth: str) -> float:
             truth_found = True
     if not truth_found:
         return 0.0
-    # Hedge word detection.
-    hedge_patterns = [
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
-        r"could be|might be)\b",
-        # "moved from X to Y" / "going to Y" / "now at Y after X"
-        r"\b(moved\s+from|going\s+to|will\s+be\s+(?:moved\s+)?to|"
-        r"will\s+move\s+to|relocate\s+to|relocating\s+to)\b",
-    ]
-    has_hedge = any(re.search(p, ans_clean) for p in hedge_patterns)
-    if has_hedge:
-        return 0.3
-    return 1.0
-
+    tkey = tru_clean[4:] if tru_clean.startswith("the ") else tru_clean
+    seg_low = _r4_segment(norm).lower()
+    locs = _r4_locations(seg_low)
+    if locs and tkey not in {k for _, _, k in locs}:
+        lead = _r4_lead(norm).lower()
+        lead_locs = _r4_locations(lead) if lead else []
+        if lead_locs and tkey in {k for _, _, k in lead_locs}:
+            seg_low, locs = lead, lead_locs
+        else:
+            return 0.0
+    if locs:
+        return 0.3 if _r4_hedged(seg_low, locs) else 1.0
+    # The final segment names no location (e.g. "ROOM 118" survives lower-casing, so this is
+    # rare): widen to the whole text.
+    low = norm.lower()
+    return 0.3 if _r4_hedged(low, _r4_locations(low)) else 1.0
 
 if __name__ == "__main__":
     for sz in ["small", "medium", "large"]:
@@ -335,3 +469,40 @@ if __name__ == "__main__":
                 f"DixieFlatline positive {k!r} should score 1.0 (seed={seed}); got {sc}"
             )
     print("DixieFlatline: scorer regression battery PASS (formats in).")
+
+    # ----- Round 4 (issue #95): final-statement scoring -----
+    # A custody/location history ("moved from X to Y"), a timeline table, a \boxed{} answer
+    # and an answer-first layout all score 1.0 when the final location is right; the
+    # destination of a move is the answer, not a hedge. A final statement naming a different
+    # location is 0.0 even when the truth appears in the working; "either A or B" is 0.3.
+    for seed in range(5):
+        d = generate(seed, "small")
+        t = d["answer"]
+        o = "Room 101" if t != "Room 101" else "Room 102"
+        o2 = "The Vault" if t != "The Vault" else "The Annex"
+        r4_pos = {
+            "history_then_final": (f"The asset was first in {o}, moved to {o2} with the Head of IT, and after the "
+                                   f"CORRECTION email it ended up in {t}.\n\nFinal answer: {t}"),
+            "moved_from_to": f"It moved from {o} to {t}",
+            "table_then_final": (f"| Step | Holder | Location |\n|---|---|---|\n| 1 | Alice | {o} |\n| 2 | Bob | {o2} |\n"
+                                 f"| 3 | Carl | {t} |\n\n**Final location: {t}**"),
+            "boxed": f"\\boxed{{\\text{{{t}}}}}",
+            "answer_first_then_explanation": (f"**{t}**\n\nThe auditor's note about moving it to {o} tomorrow is a future "
+                                              f"event, so the current office of the final holder stands."),
+            "trap_dismissed_in_final": (f"Final answer: {t} (the request to bring it to {o2} by Friday has not happened yet)"),
+            "cancelled_move_in_working": (f"Rupert cancelled his move to {o} and stayed in {t}; the drive was handed to "
+                                          f"him last.\n\n**{t}**"),
+        }
+        for k, s in r4_pos.items():
+            sc = score(s, t)
+            assert sc == 1.0, f"DixieFlatline round-4 positive {k!r} should score 1.0 (seed={seed}, truth={t!r}); got {sc}"
+        r4_neg = {
+            "either_in_final": (f"Final answer: either {o} or {t}", 0.3),
+            "possibly_in_final": (f"Final answer: {t}, or possibly {o2}", 0.3),
+            "wrong_final_truth_in_working": (f"The holder's office was {t} at one point.\n\nFinal answer: {o}", 0.0),
+            "wrong_table_final": (f"| 1 | Alice | {t} |\n| 2 | Bob | {o} |\n\n**Final location: {o}**", 0.0),
+        }
+        for k, (s, want) in r4_neg.items():
+            sc = score(s, t)
+            assert sc == want, f"DixieFlatline round-4 negative {k!r} should score {want} (seed={seed}, truth={t!r}); got {sc}"
+    print("DixieFlatline: round-4 final-statement assertions PASS (moves are not hedges; wrong finals stay wrong).")

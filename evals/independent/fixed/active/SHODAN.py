@@ -602,6 +602,68 @@ def generate(seed: int, size: str) -> dict:
     }
 
 
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
+
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+
 # Scoring parses answer formatting, not benchmark evidence. All seven numeric
 # totals must agree exactly. No partial credit or numeric tolerance is used.
 _NUMBER = re.compile(
@@ -615,16 +677,80 @@ _CONNECTORS = {
     "of", "office", "receives", "stands", "the", "to", "total", "totals",
     "units",
 }
+# Round 4: words that turn a second clean number in the same label window into an
+# explicit alternative ("Alderwick: 5 or 7", "Alderwick: possibly 5, maybe 7").
+_ALT_WORDS = {"or", "either", "possibly", "probably", "maybe", "perhaps", "alternatively"}
+# Round 4: an answer that stops mid-sentence (output cap) has no final statement. The
+# last line must end with a terminator/closer, a number, or a unit word.
+_R4_CLOSERS = ".!?:;)]}\"'\u201d\u2019*|%$"
+_R4_END_WORDS = {"credits", "credit", "units", "none", "zero", "nil"}
+
+
+def _r4_concluded(text: str) -> bool:
+    t = text.rstrip()
+    if not t:
+        return False
+    if t[-1] in _R4_CLOSERS or t[-1].isdigit():
+        return True
+    m = re.search(r"([A-Za-z][A-Za-z'\u2019-]*)\s*$", t)
+    return bool(m) and m.group(1).lower() in _R4_END_WORDS
+
+
+def _label_observation(text: str, start: int, end: int):
+    """Clean numbers in a label window, as (value, hedged).
+
+    A clean number has nothing but connector words (and, for the hedge test, alternative
+    words) between the label and itself, no unit/percent suffix. Returns None when the
+    window holds no clean number. Hedged = an alternative word in the window together with
+    two distinct clean numbers.
+    """
+    segment = text[start:end]
+    values = []
+    saw_alt = False
+    for number in _NUMBER.finditer(segment):
+        prefix = segment[:number.start()]
+        words = re.findall(r"[A-Za-z]+", prefix.casefold())
+        alts = [w for w in words if w in _ALT_WORDS]
+        if any(word not in _CONNECTORS and word not in _ALT_WORDS for word in words):
+            continue
+        # digits/operators before the number: allowed only when they belong to an earlier
+        # clean number of this window (the hedge case), never arithmetic.
+        prior_numeric = re.sub(r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?", "", prefix)
+        if values and re.search(r"[+\-*/=]", prior_numeric):
+            continue
+        if not values and re.search(r"[\d+-]", prefix):
+            continue
+        suffix = segment[number.end():]
+        if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
+            continue
+        try:
+            value = Decimal(number.group().replace(",", ""))
+        except InvalidOperation:
+            continue
+        if values and not alts:
+            break  # a second number without an alternative word is trailing prose
+        values.append(value)
+        saw_alt = saw_alt or bool(alts)
+    if not values:
+        return None
+    hedged = saw_alt and len(set(values)) >= 2
+    return values[0], hedged
 
 
 def score(answer_text: str, truth) -> float:
     """Accept JSON, Python dict notation, tables, lists, or labeled prose.
 
     Office order, letter case, ordinary punctuation, thousands commas, and
-    surrounding prose do not matter. Repeated conflicting labeled totals,
-    missing offices, and incorrect values fail. Hedges ("Alderwick: 5 or 7")
-    are detected by looking for two candidate numbers in the same label
-    segment, and any discrepancy caps the score at 0.0.
+    surrounding prose do not matter. Missing offices and incorrect values
+    fail. Hedges ("Alderwick: 5 or 7") in the authoritative label window
+    fail.
+
+    Round 4 (issue #95): the text is formatting-normalised; for each office
+    the authoritative observation is the one inside the final segment when
+    the segment carries that office's label, else the LAST clean observation.
+    Working that mentions an office with a different figure before the final
+    statement is no longer penalised. An answer that stops mid-sentence has
+    no final statement and scores 0.0.
     """
     if not isinstance(answer_text, str) or not isinstance(truth, dict):
         return 0.0
@@ -633,90 +759,39 @@ def score(answer_text: str, truth) -> float:
     if any(type(value) is not int for value in truth.values()):
         return 0.0
 
-    text = answer_text.replace("\u2212", "-").replace("\u00a0", " ")
+    text = _r4_normalize(answer_text)
+    if not _r4_concluded(text):
+        return 0.0
+    segment = _r4_segment(text)
+    seg_start = text.rstrip().rfind(segment) if segment else len(text)
     label_pattern = re.compile(
         r"\b(" + "|".join(re.escape(name) for name in OFFICES) + r")\b",
         re.IGNORECASE,
     )
     labels = list(label_pattern.finditer(text))
     canonical = {name.casefold(): name for name in OFFICES}
-    observations = {name: [] for name in OFFICES}
+    observations = {name: [] for name in OFFICES}  # (position, value, hedged)
 
     for index, label in enumerate(labels):
-        # Hedge detection only considers numbers within a tight proximity to
-        # the label (60 chars) - this captures "Alderwick: 5 or 7" while
-        # ignoring trailing prose like a "Note" line at the end of the
-        # answer that happens to contain digits.
+        # Only numbers within a tight proximity to the label (60 chars, cut at
+        # the next label) can be its value; a wider window (180) is tried when
+        # the layout puts the number farther on.
         next_start = labels[index + 1].start() if index + 1 < len(labels) else len(text)
-        end = min(next_start, label.end() + 60)
-        segment = text[label.end():end]
-        clean_candidate = None
-        hedged_other = False
-        invalid_primary_prefix = False
-        for number in _NUMBER.finditer(segment):
-            prefix = segment[:number.start()]
-            words = re.findall(r"[A-Za-z]+", prefix.casefold())
-            if any(word not in _CONNECTORS for word in words):
-                # Don't pin this number, and don't reject the whole answer
-                # unless we never got a primary.
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if re.search(r"[\d+-]", prefix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            suffix = segment[number.end():]
-            if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            try:
-                value = Decimal(number.group().replace(",", ""))
-            except InvalidOperation:
-                if clean_candidate is None:
-                    invalid_primary_prefix = True
-                continue
-            if clean_candidate is None:
-                clean_candidate = value
-            else:
-                hedged_other = True
-        if invalid_primary_prefix and clean_candidate is None:
-            # Try a wider window in case the layout put the number farther on.
-            wider_segment = text[label.end():min(next_start, label.end() + 180)]
-            for number in _NUMBER.finditer(wider_segment):
-                prefix = wider_segment[:number.start()]
-                words = re.findall(r"[A-Za-z]+", prefix.casefold())
-                if any(word not in _CONNECTORS for word in words):
-                    continue
-                if re.search(r"[\d+-]", prefix):
-                    continue
-                suffix = wider_segment[number.end():]
-                if re.match(r"\s*(?:%|/|[eE][+-]?\d|[kKmMbB]\b)", suffix):
-                    continue
-                try:
-                    value = Decimal(number.group().replace(",", ""))
-                except InvalidOperation:
-                    continue
-                if clean_candidate is None:
-                    clean_candidate = value
-                else:
-                    hedged_other = True
-            if clean_candidate is None:
-                return 0.0
-        if clean_candidate is None:
+        obs = _label_observation(text, label.end(), min(next_start, label.end() + 60))
+        if obs is None:
+            obs = _label_observation(text, label.end(), min(next_start, label.end() + 180))
+        if obs is None:
             continue
         office = canonical[label.group().casefold()]
-        observations[office].append(clean_candidate)
-        if hedged_other:
-            observations[office + "_hedge"] = True
+        observations[office].append((label.start(), obs[0], obs[1]))
 
     for office, expected in truth.items():
         values = observations[office]
         if not values:
             return 0.0
-        expected_dec = Decimal(expected)
-        if any(value != expected_dec for value in values):
+        in_segment = [v for v in values if v[0] >= seg_start]
+        _, value, hedged = (in_segment or values)[-1]
+        if hedged or value != Decimal(expected):
             return 0.0
     return 1.0
 
@@ -794,4 +869,55 @@ if __name__ == "__main__":
         # Missing office
         m = dict(truth); m.pop(offs[-1])
         assert score(json.dumps(m), truth) < 1.0
-    print("SHODAN: scorer regression battery PASS.")
+
+        # Round 4 (issue #95): the final statement is graded; working before it is not.
+        o0, o1 = offs[0], offs[1]
+        r4_positives = {
+            # markdown table of per-shipment lines ending in the per-office total rows
+            "table_lines_then_totals": (
+                "| Office | Shipment | Credits |\n|---|---|---|\n| " + o0 + " | S-101 | " + str(truth[o0] + 7) + " |\n"
+                "| " + o0 + " | S-102 | " + str(truth[o0] + 9) + " |\n\n"
+                "**Totals**\n\n| Office | Credits |\n|---|---|\n" + "\n".join("| " + o + " | " + str(truth[o]) + " |" for o in offs)
+            ),
+            # a LaTeX sum for one office followed by the full answer
+            "latex_sum_then_answer": (
+                "$$" + str(truth[o0] + 4) + " + " + str(max(truth[o0] - 4, 0)) + "$$ **= " + str(truth[o0] * 2) + "** before the waiver correction.\n\n"
+                "Final answer:\n" + "\n".join(o + ": " + str(truth[o]) for o in offs)
+            ),
+            # history paragraph ("was X, then Y") followed by the final answer
+            "history_then_final": (
+                o0 + " was provisionally " + str(truth[o0] + 12) + ", then " + str(truth[o0] + 3) + " after the seal ruling, and "
+                + o1 + " moved from " + str(truth[o1] + 5) + " to its closing figure.\n\n"
+                "Final answer: " + json.dumps(truth)
+            ),
+            # boxed answer
+            "boxed": "Working above.\n\n$\\boxed{\\text{" + ", ".join(o + ": " + str(truth[o]) for o in offs) + "}}$",
+            # a working mention of an office with a different figure, then a JSON answer
+            "working_mention_then_json": (
+                "Working: " + ", ".join(o + " " + str(truth[o] + 10) for o in offs) + "\n\nFinal answer:\n" + json.dumps(truth)
+            ),
+            # answer first, then a note naming an office with another figure
+            "final_then_note": json.dumps(truth) + "\n\nNote: " + o0 + " would have been " + str(truth[o0] + 5) + " without the waiver.",
+            # an office mentioned in prose with a non-connector prefix before the answer
+            "prose_mention_then_answer": (
+                "The " + o0 + " contact Hector Lane reports to Dorian Ellis for 3 shipments.\n\n" + json.dumps(truth)
+            ),
+        }
+        for k, s_ in r4_positives.items():
+            sc = score(s_, truth)
+            assert sc == 1.0, f"SHODAN round-4 positive {k!r} should score 1.0 (seed={seed}); got {sc}"
+        r4_negatives = {
+            # the final segment hedges one office
+            "final_either_or": "\n".join(o + ": " + str(truth[o]) for o in offs[1:]) + "\n" + o0 + ": either " + str(truth[o0]) + " or " + str(truth[o0] + 3),
+            "final_or": o0 + ": " + str(truth[o0]) + " or " + str(truth[o0] + 3) + "\n" + "\n".join(o + ": " + str(truth[o]) for o in offs[1:]),
+            # the final segment names the wrong figure while the working had the right one
+            "final_wrong_working_right": (
+                "Working: " + json.dumps(truth) + "\n\nFinal answer:\n" + json.dumps({**truth, o0: truth[o0] + 1})
+            ),
+            # cut off mid-sentence (output cap): no final statement
+            "truncated": "Mapping radio names to persons:\n- \"Maple Crown\" -> Hector Lane\n- \"Evening Fox\" -> Greta Moss\n- \"Fr",
+        }
+        for k, s_ in r4_negatives.items():
+            sc = score(s_, truth)
+            assert sc < 1.0, f"SHODAN round-4 negative {k!r} should score < 1.0 (seed={seed}); got {sc}"
+    print("SHODAN: scorer regression battery PASS (round-4 final-statement cases included).")

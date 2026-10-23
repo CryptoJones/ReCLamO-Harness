@@ -1,6 +1,6 @@
 """The independent-eval scorers must stay fair: the audit's battery of correct answers in
-reasonable formats and of wrong / hedged answers must raise zero flags on the active set,
-and on the round-4 candidate set (issue #95) while it is under review."""
+reasonable formats and of wrong / hedged answers must raise zero flags on the active set
+(round 4 since 2026-10-23) and on the round-4 set it was copied from (issue #95)."""
 
 from __future__ import annotations
 
@@ -15,7 +15,11 @@ ROOT = Path(__file__).resolve().parents[1] / "evals" / "independent"
 SCORER_SETS = ["fixed/active", "fixed/round4"]
 # Declared in evals/TEST-PLAN.md section 1d: under round 4, "It moved from Room 101 to <key>"
 # scores 1.0 because the final statement names the key as the destination. Nothing else.
-ALLOWED = {"fixed/round4": {("TheDixieFlatline", "previous_location_too")}}
+# fixed/active is byte-identical to fixed/round4 since 2026-10-23, so both carry it.
+ALLOWED = {
+    "fixed/round4": {("TheDixieFlatline", "previous_location_too")},
+    "fixed/active": {("TheDixieFlatline", "previous_location_too")},
+}
 
 
 @pytest.mark.parametrize("scorer_set", SCORER_SETS)

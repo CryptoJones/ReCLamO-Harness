@@ -136,16 +136,264 @@ def generate(seed: int, size: str) -> dict:
         "meta": meta
     }
 
-def score(answer_text: str, truth: tuple[str, int]) -> float:
-    """Robust scorer for MasterControl.
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
 
-    - 1.0 when the answer names the right employee AND states the right
-      total flagged-expense amount (in any reasonable format: bare number,
-      "$" prefix, comma separators, dollar sign, sentence form, etc.).
-    - 0.4 when only one of the two is correct.
-    - 0.3 when the answer hedges between two candidate employees or two
-      candidate amounts (even if the truth is among them).
-    - 0.0 when nothing of substance is found.
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+# --- round-4 lane helpers (this file only; same text in every round-4 scorer that uses them) ---
+_R4_ALT_ANY = _re4.compile(
+    r"\b(?:possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b",
+    _re4.IGNORECASE,
+)
+_R4_ALT_LINK = _re4.compile(r"\b(?:or|either|alternatively)\b", _re4.IGNORECASE)
+
+
+def _r4_hedged(segment: str, spans) -> bool:
+    """Rule 3, read strictly: at least two DISTINCT candidates in the segment AND the
+    alternative is offered between them ("X or Y", "either X or Y"), or the segment declares
+    uncertainty outright ("possibly", "cannot be determined"). A bare "or" elsewhere in the
+    segment ("unassigns or reassigns", "denied or withdrawn") is not a hedge.
+    spans: iterable of (start, end, key) for candidate occurrences inside segment."""
+    spans = list(spans)
+    keys = {k for _, _, k in spans}
+    if len(keys) < 2 or not _r4_explicit_alternative(segment):
+        return False
+    if _R4_ALT_ANY.search(segment):
+        return True
+    ordered = sorted(spans, key=lambda x: (x[0], x[1]))
+    for (s1, e1, k1), (s2, e2, k2) in zip(ordered, ordered[1:]):
+        if k1 != k2 and s2 - e1 <= 80 and _R4_ALT_LINK.search(segment[e1:s2]):
+            return True
+    return False
+
+
+def _r4_lead(text: str) -> str:
+    """Answer-first layout: a short standalone first line ("**Unassigned**", "**Room 130**",
+    "**$4,311.31**") followed by the explanation. Returned only when the text has more than
+    one paragraph, the first paragraph is a single line of at most 80 chars, and no answer
+    marker ("Final answer", "Therefore", ...) opens a later line (that later line is then the
+    final statement, not the lead); else ""."""
+    t = text.strip()
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    if len(paras) < 2:
+        return ""
+    first = paras[0].strip()
+    if "\n" in first or len(first) > 80:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None and last.start() >= len(first):
+        return ""
+    return first
+# --- end round-4 lane helpers ---
+
+# --- round-4 amount helpers (this file only; same text in MasterControl and Neuromancer) ---
+_R4_DATE = _re4.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_R4_MONEY = _re4.compile(
+    r"\$\s*(\d[\d,]*(?:\.\d{1,2})?)|(?<![\d.$])(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})(?!\d)"
+)
+_R4_BARE = _re4.compile(r"(?<![\d.,$])(\d{1,3}(?:,\d{3})+|\d{2,7})(?![\d.,]?\d)")
+_R4_NEG_BEFORE = _re4.compile(
+    r"(?:\b(?:not|never|wrong(?:ly)?|incorrect(?:ly)?|instead\s+of|rather\s+than)\b"
+    r"[^\d$\n]{0,20}|\bno\s*)$",
+    _re4.IGNORECASE,
+)
+_R4_NEG_AFTER = _re4.compile(
+    r"^[^\d$\n]{0,12}\b(?:is|are|was|were)(?:\s+both)?\s+(?:wrong|incorrect)\b", _re4.IGNORECASE
+)
+_R4_NEG_LIST = _re4.compile(r"^\s*(?:,|and|&)\s*$", _re4.IGNORECASE)
+_R4_OPERATOR = _re4.compile(r"^[^\n=]{0,60}(?:\+|\bplus\b|\bminus\b)[^\n=]{0,60}$", _re4.IGNORECASE)
+
+
+def _r4_amounts(text: str):
+    """Every dollar figure in text with its position and three flags: negated ("not $X",
+    "$X is wrong"), operand (sits in a shown sum: "$a + $b", "$a plus $b"), paren (inside a
+    parenthetical aside). Figures with a "$" or cents are preferred; bare integers are used
+    only when the text has none of those. ISO dates are blanked first."""
+    t = _R4_DATE.sub(lambda m: " " * (m.end() - m.start()), text)
+    found = []
+    for m in _R4_MONEY.finditer(t):
+        raw = m.group(1) or m.group(2)
+        try:
+            found.append((m.start(), m.end(), round(float(raw.replace(",", "")), 2)))
+        except ValueError:
+            continue
+    if not found:
+        for m in _R4_BARE.finditer(t):
+            try:
+                found.append((m.start(), m.end(), round(float(m.group(1).replace(",", "")), 2)))
+            except ValueError:
+                continue
+    out = []
+    for i, (s, e, v) in enumerate(found):
+        neg = bool(_R4_NEG_BEFORE.search(t[max(0, s - 24):s])) or bool(_R4_NEG_AFTER.match(t[e:e + 40]))
+        gaps = []
+        if i > 0:
+            gaps.append(t[found[i - 1][1]:s])
+        if i + 1 < len(found):
+            gaps.append(t[e:found[i + 1][0]])
+        oper = any(_R4_OPERATOR.match(g) for g in gaps)
+        paren = t[:s].count("(") > t[:s].count(")")
+        out.append({"start": s, "end": e, "value": v, "neg": neg, "oper": oper, "paren": paren})
+    # "$X and $Y are both wrong": the trailing negation covers the whole list.
+    for i in range(len(out) - 1, 0, -1):
+        if out[i]["neg"] and _R4_NEG_LIST.match(t[out[i - 1]["end"]:out[i]["start"]]):
+            out[i - 1]["neg"] = True
+    return out
+
+
+def _r4_pick_amount(text: str):
+    """(authoritative amount or None, candidate list). The authoritative amount is the LAST
+    figure that is not an operand of a shown sum, not a parenthetical aside (when a figure
+    outside parentheses exists) and not negated; the candidates are what a hedge is judged on."""
+    am = _r4_amounts(text)
+    if not am:
+        return None, []
+    cands = [a for a in am if not a["oper"]] or am
+    if any(not a["paren"] for a in cands):
+        cands = [a for a in cands if not a["paren"]]
+    clean = [a for a in cands if not a["neg"]]
+    return (clean or cands)[-1]["value"], cands
+# --- end round-4 amount helpers ---
+
+
+_R4_EMPLOYEES = ("Lena Carter", "Marcus Boone", "Priya Patel", "Ethan Nguyen", "Sophia Lee")
+_R4_EMPLOYEE_RX = _re4.compile(
+    r"\b(?:"
+    + "|".join(
+        [_re4.escape(n) for n in _R4_EMPLOYEES]
+        + [_re4.escape(n.split()[1] + ", " + n.split()[0]) for n in _R4_EMPLOYEES]
+    )
+    + r")\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_employees(text: str):
+    """Occurrences of the five possible employees (first-last or last-first, any case)."""
+    out = []
+    for m in _R4_EMPLOYEE_RX.finditer(text):
+        k = m.group(0).lower()
+        if "," in k:
+            last, first = [p.strip() for p in k.split(",", 1)]
+            k = first + " " + last
+        out.append((m.start(), m.end(), k))
+    return out
+
+
+def _r4_mc_amount(norm: str, truth_amount: int):
+    """(amount_ok, amount_hedge) for the normalised answer. The authoritative amount is the
+    last clean figure in the final segment, else in the whole text; an answer-first lead line
+    is consulted only when the segment's figure is not the truth."""
+    seg = _r4_segment(norm)
+    val, cands = _r4_pick_amount(seg)
+    scope = seg
+    if val is None:
+        val, cands = _r4_pick_amount(norm)
+        scope = norm
+    if val is not None and abs(val - truth_amount) >= 0.01:
+        lead = _r4_lead(norm)
+        lval, lcands = _r4_pick_amount(lead) if lead else (None, [])
+        if lval is not None and abs(lval - truth_amount) < 0.01:
+            val, cands, scope = lval, lcands, lead
+    ok = val is not None and abs(val - truth_amount) < 0.01
+    hedge = _r4_hedged(scope, [(a["start"], a["end"], a["value"]) for a in cands])
+    return ok, hedge
+
+
+def _r4_mc_name(norm: str, truth_name_low: str):
+    """(name_ok, name_hedge). If the final segment names any of the five employees, the truth
+    must be among them (a wrong name in the final statement is wrong even if the working
+    mentioned the right one); otherwise the truth is looked for anywhere (first-last,
+    last-first, any case) as before."""
+    seg = _r4_segment(norm)
+    names = _r4_employees(seg)
+    if names and truth_name_low not in {k for _, _, k in names}:
+        lead = _r4_lead(norm)
+        lnames = _r4_employees(lead) if lead else []
+        if lnames and truth_name_low in {k for _, _, k in lnames}:
+            seg, names = lead, lnames
+    if names:
+        keys = {k for _, _, k in names}
+        return truth_name_low in keys, _r4_hedged(seg, names)
+    low = norm.lower()
+    parts = truth_name_low.split()
+    ok = truth_name_low in low
+    if len(parts) == 2:
+        ok = ok or (parts[1] + ", " + parts[0]) in low
+    return ok, False
+
+
+def score(answer_text: str, truth: tuple[str, int]) -> float:
+    """Round-4 scorer for MasterControl: grades the FINAL STATEMENT.
+
+    - 1.0 when the final statement names the right employee AND its authoritative amount
+      (the last clean figure in the final segment: not an operand of a shown sum, not a
+      parenthetical breakdown, not negated) equals the truth, with no explicit alternative
+      between two names or two amounts in that segment.
+    - 0.3 when the final statement hedges ("either X or Y", "$a or $b") and one half is right.
+    - 0.4 when only one of the two is right.
+    - 0.0 otherwise.
+    Shown working (a table of line items, a sum, earlier figures) is never a penalty.
     """
     if not isinstance(answer_text, str):
         return 0.0
@@ -169,72 +417,11 @@ def score(answer_text: str, truth: tuple[str, int]) -> float:
                             candidate_amount == truth_amount):
                         return 1.0
 
-    # Find candidate names: any Title-Case multi-word phrase.
-    name_pattern = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b")
-    name_candidates = [n for n in name_pattern.findall(answer_text)]
-    name_candidates_low = [n.lower() for n in name_candidates]
-
-    # Find candidate amounts: allow $ prefix, comma separators, optional cents.
-    amount_pattern = re.compile(r"\$\s*(\d[\d,]*(?:\.\d{1,2})?)")
-    plain_amount_pattern = re.compile(r"(?<![\d.])(\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{2,7}(?:\.\d{1,2})?)(?!\d)")
-    amount_values = []
-    for a in amount_pattern.findall(answer_text):
-        try:
-            amount_values.append(round(float(a.replace(",", "")), 2))
-        except ValueError:
-            continue
-    for a in plain_amount_pattern.findall(answer_text):
-        try:
-            amount_values.append(round(float(a.replace(",", "")), 2))
-        except ValueError:
-            continue
-
-    name_match = any(n == truth_name_low for n in name_candidates_low)
-    name_lower_match = truth_name_low in answer_text.lower()
-    # "Last, First" forms: "Patel, Priya" - check reversed-name form.
-    parts_truth = truth_name_low.split()
-    name_reversed_match = False
-    if len(parts_truth) == 2:
-        reversed_form = parts_truth[1] + ", " + parts_truth[0]
-        name_reversed_match = reversed_form in answer_text.lower()
-    name_ok = name_match or name_lower_match or name_reversed_match
-
-    amount_match = any(abs(v - truth_amount) < 0.01 for v in amount_values)
-    amount_ok = amount_match
-
-    # Hedge word detection: "either ... or", "alternatively", "possibly", etc.
-    hedge_word_pattern = re.compile(
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|likely|"
-        r"could be|might be)\b",
-        re.IGNORECASE,
-    )
-    has_hedge_word = bool(hedge_word_pattern.search(answer_text))
-
-    # Hedge detection: multiple distinct candidate names, or multiple
-    # distinct candidate amounts.
-    distinct_names = set()
-    for n in name_candidates_low:
-        if " " in n:
-            distinct_names.add(n)
-    name_hedge = (
-        len(distinct_names) >= 2
-        and truth_name_low not in distinct_names
-    ) or (
-        len(distinct_names) >= 3
-    )
-    distinct_amounts = {
-        int(round(v)) for v in amount_values if v >= 100
-    }
-    amount_hedge = (
-        len(distinct_amounts) >= 2
-        and truth_amount not in distinct_amounts
-    ) or (
-        len(distinct_amounts) >= 3
-    )
-    # A hedge word near a competing candidate forces a hedge decision.
-    if has_hedge_word and (len(distinct_names) >= 2 or len(distinct_amounts) >= 2):
-        name_hedge = name_hedge or len(distinct_names) >= 2
-        amount_hedge = amount_hedge or len(distinct_amounts) >= 2
+    norm = _r4_normalize(answer_text)
+    if not norm.strip():
+        return 0.0
+    amount_ok, amount_hedge = _r4_mc_amount(norm, truth_amount)
+    name_ok, name_hedge = _r4_mc_name(norm, truth_name_low)
     any_hedge = name_hedge or amount_hedge
 
     if name_ok and amount_ok and not any_hedge:
@@ -398,3 +585,67 @@ if __name__ == "__main__":
                 f"MasterControl hedge {k!r} should score < 1.0 (seed={seed}); got {sc}"
             )
     print("MasterControl: scorer regression battery PASS (formats in/hedges out).")
+
+    # ----- Round 4 (issue #95): final-statement scoring -----
+    # Shown working is not a hedge any more: a table of line items ending in a total row, a
+    # LaTeX sum, a parenthetical breakdown after the total, or a history paragraph before the
+    # final answer all score 1.0 when the final statement is right. A wrong final statement
+    # stays wrong even when the working mentioned the right value, and "either A or B" in the
+    # final segment is a hedge.
+    def _lt(v):
+        return ("\\$%s" % format(v, ",")).replace(",", "{,}")
+
+    for seed in range(5):
+        d = generate(seed, "small")
+        n, amt = d["answer"]
+        other = [e for e in emps if e != n][0]
+        a1, a2 = amt - 1234, 1234
+        r4_pos = {
+            "table_total_row": (
+                f"The employee is **{n}**.\n\n| Date | Item | Amount |\n|------|------|--------|\n"
+                f"| 2024-03-01 | Hotel stay | ${a1:,}.00 |\n| 2024-04-02 | Taxi fare | ${a2:,}.00 |\n"
+                f"| **Total** | | **${amt:,}.00** |"
+            ),
+            "table_then_total_line_and_note": (
+                f"**{n}**\n\n| Date | Item | Amount |\n|---|---|---|\n| 2024-03-01 | Hotel stay | ${a1:,}.00 |\n"
+                f"| 2024-04-02 | Taxi fare | ${a2:,}.00 |\n\n**Total: ${amt:,}.00**\n\n"
+                f"Note: the flags are applied at the report level, so the total covers all of {n}'s expenses."
+            ),
+            "latex_sum_then_bold_total": f"{n}\n\n## Total\n\n$${_lt(a1)}.00 + {_lt(a2)}.00$$\n\n**= ${amt:,}.00**",
+            "latex_boxed": f"{n}\n\n## Total\n\n$${_lt(a1)}.00 + {_lt(a2)}.00 = \\boxed{{{_lt(amt)}.00}}$$",
+            "boxed_plain": f"{n}: \\boxed{{\\${amt:,}}}",
+            "history_then_final": (
+                f"{n} was initially flagged at ${a1:,}; after the correction email the figure was revised.\n\n"
+                f"Final answer: {n}, ${amt:,}"
+            ),
+            "paren_breakdown_after_total": f"{n} — ${amt:,}.00 (sum of 2 transactions: ${a1:,} + ${a2:,})",
+            "plus_breakdown_no_parens": f"{n}; total flagged expenses = ${amt:,}.00: ${a1:,} plus ${a2:,}",
+            "caveat_with_or_single_amount": (
+                f"{n}\n\n**Total: ${amt:,}.00**\n\nThe document does not say whether the flags apply to the "
+                f"'double-dipped invoices' or the 'non-compliant vendor' items."
+            ),
+            "answer_first_then_explanation": (
+                f"**{n} — ${amt:,}.00**\n\nThe flags were applied to the whole report; the 'late submission' "
+                f"flag for {other} was retracted."
+            ),
+            "lowercase_table": f"{n.lower()}\n\n| item | amount |\n|---|---|\n| hotel | ${a1:,} |\n| total | ${amt:,} |",
+        }
+        for k, s in r4_pos.items():
+            sc = score(s, d["answer"])
+            assert sc == 1.0, f"MasterControl round-4 positive {k!r} should score 1.0 (seed={seed}); got {sc}"
+        r4_neg = {
+            "either_names_in_final": (f"Working: candidates are {n} and {other}.\n\n"
+                                      f"Final answer: either {other} or {n}; ${amt:,}", 0.3),
+            "either_amounts_in_final": (f"{n}\n\nFinal answer: ${a1:,} or ${amt:,}", 0.3),
+            "wrong_name_final_right_in_working": (f"I first considered {n} (${amt:,}).\n\n"
+                                                  f"Final answer: {other}, ${amt:,}", 0.4),
+            "wrong_amount_final_right_in_working": (f"{n}'s log sums to ${amt:,} before corrections.\n\n"
+                                                    f"Final answer: {n}, ${amt + 500:,}", 0.4),
+            "truth_then_wrong_same_sentence": (f"{n}: I first got ${amt:,} but the final total is ${amt + 250:,}.", 0.4),
+            "wrong_table_total": (f"{n}\n\n| Item | Amount |\n|---|---|\n| Hotel | ${amt:,}.00 |\n"
+                                  f"| **Total** | **${amt + 1:,}.00** |", 0.4),
+        }
+        for k, (s, want) in r4_neg.items():
+            sc = score(s, d["answer"])
+            assert sc == want, f"MasterControl round-4 negative {k!r} should score {want} (seed={seed}); got {sc}"
+    print("MasterControl: round-4 final-statement assertions PASS (working is not a hedge; wrong finals stay wrong).")

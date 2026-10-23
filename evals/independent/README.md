@@ -207,7 +207,7 @@ To re-score rows produced before this round:
 `uv run python evals/independent/run_eval.py --rescore FILE [--out NEW]`. It writes
 `FILE.rescored.json` plus a summary, and records `old_score` / `new_score` on every row.
 
-## Round 4 (scorer-only, 2026-10-19; under review, NOT active)
+## Round 4 (scorer-only, 2026-10-19; **ACTIVE since 2026-10-23**)
 
 Issue #95. The round-3 scorers penalise an answer for *showing its work*: several dollar
 amounts anywhere in the text (MasterControl, GLaDOS), a "not" or "or" anywhere next to a
@@ -251,13 +251,17 @@ Exact counts on the confirmatory H1 rows (seeds 4–30), round 3 → round 4, ha
 111 rows flip up and none down; every flip was read by hand (issue #95). The one battery
 exception (TheDixieFlatline `previous_location_too`) is declared in TEST-PLAN 1d.
 
-**Status.** Round 4 is a proposal. `manifest.json` lists it under `round4` per lane and keeps
-`active` on round 3 until CJ approves the TEST-PLAN 1d amendment and the #90 hand-check has
-been compared against both graders. Rescoring, when approved, writes new files under
-`runs/exp-v02/rescored-round4/` with `old_score` / `new_score` per row and never touches the
-recorded ones. The recomputed H1 is reported beside the recorded one and labelled post hoc.
+**Status.** Round 4 is the active set since 2026-10-23 (CJ; epic #80 decision 16; TEST-PLAN
+1d-ii). `fixed/active/` is byte-identical to `fixed/round4/`, and `manifest.json` records the
+switch per lane (`active.switched`, `active.previous` with the retired round-3 sha256).
+Validation (e) was met: on CJ's 40-pair #90 sample round 4 agrees with CJ on 71/77 answers
+against 59/77 for round 3, and with the Fable judge on 738/765 answers against 627/765, and
+is at least as good as round 3 on every task in both comparisons. Rows run before the switch
+carry `active_source` "round-3 ..."; their round-4 view is `runs/exp-v02/rescored-round4/`
+(`old_score` / `new_score` per row; the recorded files are never rewritten). Rows run after
+the switch are scored by round 4 directly and carry `active_source` "round-4 ...".
 
-To rescore with the candidates for diagnosis only:
+To rescore an older file with the round-4 set:
 `uv run python evals/independent/rescore_round4.py runs/exp-v02/plain-131k.json --out runs/exp-v02/rescored-round4/plain-131k.json`.
 
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*

@@ -177,67 +177,229 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
     return {"context": context, "question": question, "answer": answer, "meta": meta}
 
 
-def score(answer_text: str, truth: Any) -> float:
-    # Extract all dollar amounts (with optional $, commas, decimal)
-    pattern = r'\$?\s*([\d,]+(?:\.\d{1,2})?)'
-    matches = re.findall(pattern, answer_text)
-    if not matches:
-        return 0.0
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
 
-    truth_str = truth.replace("$", "").replace(",", "")
-    try:
-        truth_num = float(truth_str)
-    except:
-        return 0.0
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
 
-    # Collect distinct numeric values (as floats)
-    amounts = []
-    for m in matches:
-        num_str = m.replace(",", "")
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+# --- round-4 lane helpers (this file only; same text in every round-4 scorer that uses them) ---
+_R4_ALT_ANY = _re4.compile(
+    r"\b(?:possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b",
+    _re4.IGNORECASE,
+)
+_R4_ALT_LINK = _re4.compile(r"\b(?:or|either|alternatively)\b", _re4.IGNORECASE)
+
+
+def _r4_hedged(segment: str, spans) -> bool:
+    """Rule 3, read strictly: at least two DISTINCT candidates in the segment AND the
+    alternative is offered between them ("X or Y", "either X or Y"), or the segment declares
+    uncertainty outright ("possibly", "cannot be determined"). A bare "or" elsewhere in the
+    segment ("unassigns or reassigns", "denied or withdrawn") is not a hedge.
+    spans: iterable of (start, end, key) for candidate occurrences inside segment."""
+    spans = list(spans)
+    keys = {k for _, _, k in spans}
+    if len(keys) < 2 or not _r4_explicit_alternative(segment):
+        return False
+    if _R4_ALT_ANY.search(segment):
+        return True
+    ordered = sorted(spans, key=lambda x: (x[0], x[1]))
+    for (s1, e1, k1), (s2, e2, k2) in zip(ordered, ordered[1:]):
+        if k1 != k2 and s2 - e1 <= 80 and _R4_ALT_LINK.search(segment[e1:s2]):
+            return True
+    return False
+
+
+def _r4_lead(text: str) -> str:
+    """Answer-first layout: a short standalone first line ("**Unassigned**", "**Room 130**",
+    "**$4,311.31**") followed by the explanation. Returned only when the text has more than
+    one paragraph, the first paragraph is a single line of at most 80 chars, and no answer
+    marker ("Final answer", "Therefore", ...) opens a later line (that later line is then the
+    final statement, not the lead); else ""."""
+    t = text.strip()
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    if len(paras) < 2:
+        return ""
+    first = paras[0].strip()
+    if "\n" in first or len(first) > 80:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None and last.start() >= len(first):
+        return ""
+    return first
+# --- end round-4 lane helpers ---
+
+# --- round-4 amount helpers (this file only; same text in MasterControl and Neuromancer) ---
+_R4_DATE = _re4.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_R4_MONEY = _re4.compile(
+    r"\$\s*(\d[\d,]*(?:\.\d{1,2})?)|(?<![\d.$])(\d{1,3}(?:,\d{3})+\.\d{2}|\d+\.\d{2})(?!\d)"
+)
+_R4_BARE = _re4.compile(r"(?<![\d.,$])(\d{1,3}(?:,\d{3})+|\d{2,7})(?![\d.,]?\d)")
+_R4_NEG_BEFORE = _re4.compile(
+    r"(?:\b(?:not|never|wrong(?:ly)?|incorrect(?:ly)?|instead\s+of|rather\s+than)\b"
+    r"[^\d$\n]{0,20}|\bno\s*)$",
+    _re4.IGNORECASE,
+)
+_R4_NEG_AFTER = _re4.compile(
+    r"^[^\d$\n]{0,12}\b(?:is|are|was|were)(?:\s+both)?\s+(?:wrong|incorrect)\b", _re4.IGNORECASE
+)
+_R4_NEG_LIST = _re4.compile(r"^\s*(?:,|and|&)\s*$", _re4.IGNORECASE)
+_R4_OPERATOR = _re4.compile(r"^[^\n=]{0,60}(?:\+|\bplus\b|\bminus\b)[^\n=]{0,60}$", _re4.IGNORECASE)
+
+
+def _r4_amounts(text: str):
+    """Every dollar figure in text with its position and three flags: negated ("not $X",
+    "$X is wrong"), operand (sits in a shown sum: "$a + $b", "$a plus $b"), paren (inside a
+    parenthetical aside). Figures with a "$" or cents are preferred; bare integers are used
+    only when the text has none of those. ISO dates are blanked first."""
+    t = _R4_DATE.sub(lambda m: " " * (m.end() - m.start()), text)
+    found = []
+    for m in _R4_MONEY.finditer(t):
+        raw = m.group(1) or m.group(2)
         try:
-            num = float(num_str)
-            amounts.append(round(num, 2))
-        except:
+            found.append((m.start(), m.end(), round(float(raw.replace(",", "")), 2)))
+        except ValueError:
             continue
+    if not found:
+        for m in _R4_BARE.finditer(t):
+            try:
+                found.append((m.start(), m.end(), round(float(m.group(1).replace(",", "")), 2)))
+            except ValueError:
+                continue
+    out = []
+    for i, (s, e, v) in enumerate(found):
+        neg = bool(_R4_NEG_BEFORE.search(t[max(0, s - 24):s])) or bool(_R4_NEG_AFTER.match(t[e:e + 40]))
+        gaps = []
+        if i > 0:
+            gaps.append(t[found[i - 1][1]:s])
+        if i + 1 < len(found):
+            gaps.append(t[e:found[i + 1][0]])
+        oper = any(_R4_OPERATOR.match(g) for g in gaps)
+        paren = t[:s].count("(") > t[:s].count(")")
+        out.append({"start": s, "end": e, "value": v, "neg": neg, "oper": oper, "paren": paren})
+    # "$X and $Y are both wrong": the trailing negation covers the whole list.
+    for i in range(len(out) - 1, 0, -1):
+        if out[i]["neg"] and _R4_NEG_LIST.match(t[out[i - 1]["end"]:out[i]["start"]]):
+            out[i - 1]["neg"] = True
+    return out
 
-    if not amounts:
+
+def _r4_pick_amount(text: str):
+    """(authoritative amount or None, candidate list). The authoritative amount is the LAST
+    figure that is not an operand of a shown sum, not a parenthetical aside (when a figure
+    outside parentheses exists) and not negated; the candidates are what a hedge is judged on."""
+    am = _r4_amounts(text)
+    if not am:
+        return None, []
+    cands = [a for a in am if not a["oper"]] or am
+    if any(not a["paren"] for a in cands):
+        cands = [a for a in cands if not a["paren"]]
+    clean = [a for a in cands if not a["neg"]]
+    return (clean or cands)[-1]["value"], cands
+# --- end round-4 amount helpers ---
+
+
+def _r4_same_cents(a: float, b: float) -> bool:
+    """Equal to the cent: a half-cent tolerance, so $X.13 is not $X.12."""
+    return abs(a - b) < 0.005
+
+
+def score(answer_text: str, truth: Any) -> float:
+    """Round-4 scorer for Neuromancer: grades the FINAL STATEMENT.
+
+    The answer is normalised (LaTeX money, \\boxed{}, markdown), the final segment located,
+    and the authoritative amount is the LAST clean figure in it: not an operand of a shown
+    sum ("$a + $b = $T" -> T), not a parenthetical breakdown after the total, not negated
+    ("not $X"). 1.0 iff that amount equals the truth within a cent and the segment does not
+    offer an explicit alternative between two amounts; 0.0 otherwise. Equality is to the cent
+    (half-cent tolerance), so an off-by-a-cent figure is wrong. Shown working is never a
+    penalty; a wrong final figure is wrong even if the truth appears in the working.
+    """
+    if not isinstance(answer_text, str) or not isinstance(truth, str):
         return 0.0
-
-    # Check for hedges: if the answer contains a negated amount or an "or" between amounts
-    # We scan for negation patterns: "not $X", "no $X", "incorrect $X", "wrong $X", "instead of $X", "rather than $X"
-    # Also amounts separated by "or" (e.g., "$X or $Y")
-    hedge_patterns = [
-        r'(?:not|no|never|wrong|incorrect|instead\s+of|rather\s+than)\s+\$?\s*[\d,]+(?:\.\d{1,2})?',
-        r'\$?\s*[\d,]+(?:\.\d{1,2})?\s+or\s+\$?\s*[\d,]+(?:\.\d{1,2})?',
-        r'\$?\s*[\d,]+(?:\.\d{1,2})?\s+and\s+\$?\s*[\d,]+(?:\.\d{1,2})?\s+are\s+both\s+wrong',
-    ]
-    for hp in hedge_patterns:
-        if re.search(hp, answer_text, re.IGNORECASE):
+    try:
+        truth_num = float(truth.replace("$", "").replace(",", ""))
+    except ValueError:
+        return 0.0
+    norm = _r4_normalize(answer_text)
+    if not norm.strip():
+        return 0.0
+    seg = _r4_segment(norm)
+    val, cands = _r4_pick_amount(seg)
+    scope = seg
+    if val is None:
+        val, cands = _r4_pick_amount(norm)
+        scope = norm
+    if val is None:
+        return 0.0
+    if not _r4_same_cents(val, truth_num):
+        # Answer-first layout: "**$X**" then an explanation that does not restate X.
+        lead = _r4_lead(norm)
+        lval, lcands = _r4_pick_amount(lead) if lead else (None, [])
+        if lval is None or not _r4_same_cents(lval, truth_num):
             return 0.0
-
-    # Also, if there are multiple distinct amounts and any of them is not equal to truth,
-    # and the answer contains a word like "or", "not", "maybe", "possibly", "either", "neither",
-    # we treat it as a hedge. This catches more subtle cases.
-    distinct_amounts = sorted(set(amounts))
-    if len(distinct_amounts) > 1:
-        # Check for hedging keywords
-        hedge_keywords = r'\b(?:or|not|maybe|possibly|either|neither|instead|rather|wrong|incorrect)\b'
-        if re.search(hedge_keywords, answer_text, re.IGNORECASE):
-            # If truth is among the amounts, but there is a wrong amount, it's a hedge
-            if truth_num in distinct_amounts:
-                if any(abs(a - truth_num) > 0.01 for a in distinct_amounts):
-                    return 0.0
-
-    # Now check if truth appears as a distinct amount
-    if any(abs(a - truth_num) < 0.01 for a in distinct_amounts):
-        # Ensure the answer contains the truth substring (normalized) as a safeguard
-        norm_answer = answer_text.replace("$", "").replace(",", "").lower().strip()
-        norm_truth = truth.replace("$", "").replace(",", "").lower().strip()
-        if norm_truth in norm_answer:
-            return 1.0
-
-    return 0.0
-
+        val, cands, scope = lval, lcands, lead
+    if _r4_hedged(scope, [(a["start"], a["end"], a["value"]) for a in cands]):
+        return 0.0
+    return 1.0
 
 if __name__ == "__main__":
     for seed in range(5):
@@ -273,19 +435,29 @@ if __name__ == "__main__":
                 sc = score(fmt, ans)
                 assert sc == 1.0, f"Format '{fmt}' should score 1.0, got {sc}"
 
-            # Test hedges (should score 0.0)
+            # Test hedges (should score 0.0): an explicit alternative between amounts in the
+            # final statement, or a final statement that rejects every amount it names.
             hedge_formats = [
-                f"Not ${truth_num+1:.2f}; it is ${truth_num:.2f}",
                 f"${truth_num+1:.2f} or ${truth_num:.2f}",
                 f"Maybe ${truth_num:.2f} or ${truth_num+2:.2f}",
-                f"The answer is not ${truth_num+5:.2f}, it is ${truth_num:.2f}",
                 f"Either ${truth_num:.2f} or ${truth_num+1:.2f}",
-                f"Incorrect: ${truth_num+10:.2f}; correct: ${truth_num:.2f}",
                 f"${truth_num:.2f} and ${truth_num+3:.2f} are both wrong",
             ]
             for hedge in hedge_formats:
                 sc = score(hedge, ans)
                 assert sc == 0.0, f"Hedge '{hedge}' should score 0.0, got {sc}"
+            # Round 4 (issue #95): these used to be expected 0.0 under the old "negated amount
+            # anywhere" rule. Their FINAL statement is the truth ("it is $X", "correct: $X") and
+            # the negated figure is skipped when picking the authoritative amount, so they are
+            # right answers: 1.0.
+            negated_then_stated = [
+                f"Not ${truth_num+1:.2f}; it is ${truth_num:.2f}",
+                f"The answer is not ${truth_num+5:.2f}, it is ${truth_num:.2f}",
+                f"Incorrect: ${truth_num+10:.2f}; correct: ${truth_num:.2f}",
+            ]
+            for s in negated_then_stated:
+                sc = score(s, ans)
+                assert sc == 1.0, f"Negated-then-stated '{s}' should score 1.0 under round 4, got {sc}"
 
             # Test clearly wrong answers
             wrongs = [
@@ -307,3 +479,59 @@ if __name__ == "__main__":
 
         print(f"Seed {seed}: all assertions passed.\n")
     print("All seeds and sizes passed.")
+
+    # ----- Round 4 (issue #95): final-statement scoring -----
+    # The recorded plain answers end in a LaTeX sum ("$$\$a + \$b$$ **= $T**" or
+    # "= \boxed{\$T}"), a markdown table with a total row, or "Total: $a + $b = $T"; the
+    # harness arm sometimes adds a parenthetical breakdown after the total. All of these are
+    # right answers and must score 1.0. A wrong final figure stays 0.0 even when the truth
+    # appears in the working, and "either $a or $b" in the final segment is 0.0.
+    def _lt(v):
+        return ("\\$%s" % format(v, ",.2f")).replace(",", "{,}")
+
+    def _bare(v):
+        return format(v, ",.2f").replace(",", "{,}")
+
+    for seed in range(5):
+        for size in ["small", "medium"]:
+            ans = generate(seed, size)["answer"]
+            v = float(ans.replace("$", "").replace(",", ""))
+            a1 = round(v * 0.4, 2)
+            a2 = round(v - a1, 2)
+            r4_pos = {
+                "table_total_row": (f"| Employee | Approved |\n|---|---|\n| Bob | ${a1:,.2f} |\n| Eve | ${a2:,.2f} |\n"
+                                    f"| **Total** | **${v:,.2f}** |"),
+                "table_then_bold_total": (f"| Employee | Approved |\n|---|---|\n| Bob | ${a1:,.2f} |\n"
+                                          f"| Eve | ${a2:,.2f} |\n\n**Total = ${v:,.2f}**"),
+                "latex_sum_then_bold_total": f"## Total\n\n$${_lt(a1)} + {_lt(a2)}$$\n\n**= ${v:,.2f}**",
+                "latex_boxed": f"## Total\n\n$${_lt(a1)} + {_lt(a2)} = \\boxed{{{_lt(v)}}}$$",
+                "latex_boxed_no_dollar_operands": (f"## Total\n\n$${_bare(a1)} + {_bare(a2)} = \\boxed{{{_lt(v)}}}$$"),
+                "bold_total_with_sum": f"**Total: ${a1:,.2f} + ${a2:,.2f} = ${v:,.2f}**",
+                "history_then_final": (f"Bob's claim was first ${a1:,.2f}, then adjusted, then approved.\n\n"
+                                       f"Final answer: ${v:,.2f}"),
+                "paren_breakdown_after_total": (f"${v:,.2f} (Frank ${a1:,.2f} + Carol ${a2:,.2f}; "
+                                                f"no March travel claims were denied)"),
+                "plus_prose_after_total": (f"${v:,.2f} — Alice's March Travel approved at ${a1:,.2f} plus "
+                                           f"Frank's corrected/approved ${a2:,.2f}"),
+                "denied_or_withdrawn_then_sum": (f"No March Travel claims were denied or withdrawn.\n\n**Total:**\n"
+                                                 f"${a1:,.2f} + ${a2:,.2f} = **${v:,.2f}**"),
+                "answer_first_then_explanation": (f"**${v:,.2f}**\n\nThat is Bob's approved ${a1:,.2f} together with "
+                                                  f"Eve's approved ${a2:,.2f}; nothing was denied."),
+                "explain_count_after": f"${v:,.2f} reimbursed across 4 March travel claims",
+            }
+            for k, s in r4_pos.items():
+                sc = score(s, ans)
+                assert sc == 1.0, f"Neuromancer round-4 positive {k!r} should score 1.0 (seed={seed}, {size}); got {sc}"
+            r4_neg = {
+                "either_in_final": f"Either ${v + 100:.2f} or ${v:.2f}",
+                "wrong_final_truth_in_working": (f"Working: the approved March travel claims sum to ${v:.2f}.\n\n"
+                                                 f"Final answer: ${v + 100:.2f}"),
+                "wrong_latex_total_truth_operand": f"$${_lt(v)} + {_lt(a1)} = \\boxed{{{_lt(round(v + a1, 2))}}}$$",
+                "both_wrong_list": f"${v:.2f} and ${v + 3:.2f} are both wrong",
+                "truth_negated_then_wrong": f"Not ${v:.2f}; it is ${v + 200:.2f}",
+                "wrong_table_total": f"| Bob | ${v:,.2f} |\n| **Total** | **${v + 1:,.2f}** |",
+            }
+            for k, s in r4_neg.items():
+                sc = score(s, ans)
+                assert sc == 0.0, f"Neuromancer round-4 negative {k!r} should score 0.0 (seed={seed}, {size}); got {sc}"
+    print("Neuromancer: round-4 final-statement assertions PASS (LaTeX/table/sum totals in; wrong finals out).")

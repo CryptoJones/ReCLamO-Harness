@@ -355,6 +355,40 @@ approved.
   not the switch. Rescoring into `runs/exp-v02/rescored-round4/` proceeds now, and the recomputed
   H1 is labelled post hoc as above.
 
+**1d-ii. Addendum, 2026-10-23 (CJ "Go", 18:20 CDT; epic #80 decision 16).** Validation (e) was
+run and met, `active` is switched to round 4, and H1-small resumes.
+
+- **Validation (e), recorded on #90.** CJ graded the 40-pair stratified block of the #90 sheet
+  (80 answers; 3 marked unsure and excluded; the 22 judge-disagreement pairs were not marked).
+  CJ vs Fable 72/74 (two disagreements, both GLaDOS). CJ vs round 4 71/77; CJ vs round 3 59/77.
+  Round 4 is at least as good as round 3 on every task. Every round-3 miss is a plain-arm answer
+  CJ marks right that round 3 scored 0–0.3 (MasterControl 6, Neuromancer 3, SELMA 1, Cerebex 1,
+  Multivac 1); round 4 scores all of them 1.0. Round-4 misses: four Multivac answers CJ and Fable
+  both call right (scored 0.2) and one GLaDOS harness answer. On all 765 Fable-decided answers,
+  round 4 agrees with Fable on 738 against 627 for round 3, and is at least as good on every
+  task (GLaDOS 39 vs 31 of 49, Multivac 91 vs 81 of 108, MasterControl 108 vs 47 of 108,
+  Neuromancer 105 vs 83 of 105, SELMA 108 vs 100 of 108, Cerebex 106 vs 104 of 106, SHODAN and
+  TheDixieFlatline equal). Pair winners on CJ's 38 decided pairs: CJ 8 harness / 4 plain / 26
+  tie; round 4 7 / 7 / 24; round 3 19 / 6 / 13. CJ's winner matches round 4 on 32 pairs and
+  round 3 on 23. CJ's one note: on Cerebex medium seed 5 both arms agreed with each other, so
+  the answer key for that cell may be wrong (both graders and Fable score both arms 0).
+- **`active` is round 4** from this merge. `fixed/active/` is byte-identical to `fixed/round4/`;
+  `manifest.json` records the switch and the retired round-3 sha256 per lane. Every row carries
+  `active_source`, so rows scored under round 3 (seeds 2–30 and the five seed-31 rows) remain
+  identifiable; their round-4 view stays in `runs/exp-v02/rescored-round4/`, which is
+  regenerated whenever the recorded files grow.
+- **H1 status under round 4** (from #95): small does not cross at either look (z = −1.13 at
+  seed 17, −2.06 at seed 30), so the small stop in 1c does not hold and **H1-small continues**
+  to the pre-registered 320 pairs: seeds 31–43, small only, both arms, same pinned code, same
+  engine (`runs/replay/stackA-provenance.json`), written into the recorded run files with
+  `--resume` and scored by the active (round-4) set at run time. The final look is at seed 43
+  with the 320-pair boundary. Medium crosses at the seed-30 look (z = +2.56 > 2.454) and stays
+  stopped; no medium rows are run. The engine noise floor from #97 (about 10% per-row flips at
+  temperature 0 under round 4) is reported beside the final small result.
+- **Multivac** is the one task where round 4 still under-credits against both CJ and Fable
+  (4 of 12 sampled answers; 17 of 108 overall). It is reported with and without Multivac at the
+  final look. No further scorer change is made mid-run.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
