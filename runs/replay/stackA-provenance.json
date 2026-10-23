@@ -1,0 +1,57 @@
+{
+  "name": "stack A",
+  "recorded": "2026-10-19T14:40:00-05:00",
+  "host": "pluto",
+  "engine": "Strata (V100 fork)",
+  "strata_commit": "a4b679b1",
+  "strata_commit_date": "2026-10-05 00:19:17 -0400",
+  "strata_dir": "~/strata-v100",
+  "unit": "strata-flashnext.service (user)",
+  "unit_active_since": "2026-10-18 19:12:18 CDT",
+  "config": "~/strata-v100/strata-flashnext.json",
+  "config_args": "--pack packs/ud-q4_k_xl --native .../Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf --expert-profile data/expert-profile.bin --expert-cache auto --prefill auto --spec 4 --spec-min-p 0.5 --mtp mtp/rt --max-context 262144 --kv-resident 65536 --kv int8 --layer-split auto --batch 2",
+  "gpu": [
+    2,
+    0,
+    1
+  ],
+  "layer_split": "auto",
+  "parallel": 2,
+  "model_name": "huihui-qwen3.8-flash-next-abliterated",
+  "aliases": [
+    "qwen3.8-flash-next",
+    "qwen3.8-flash-next-ud-q4_k_xl"
+  ],
+  "gguf": {
+    "dir": "~/models/Qwen3.8-Flash-Next-GGUF/UD-Q4_K_XL",
+    "files": {
+      "Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf": {
+        "bytes": 10946752,
+        "mtime": "2026-09-22 22:52",
+        "sha256": "290a31ca20b74ed2c21b257d378a5678d821ad9fdd8feb1fc52c719761668903"
+      },
+      "Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf": {
+        "bytes": 49859583296,
+        "mtime": "2026-09-22 23:13",
+        "sha256": "0ebf70d076e0e98f74dc414a90b92c67d7267876ae524bc7799cf463e27b754b"
+      },
+      "Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf": {
+        "bytes": 49376141664,
+        "mtime": "2026-09-22 23:29",
+        "sha256": "e9b12f44e13e60d6ef9396449f7b4356b2e2911222b8183a596830c2418db19a"
+      },
+      "Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf": {
+        "bytes": 12087983680,
+        "mtime": "2026-09-22 23:32",
+        "sha256": "983901b3e47686f56f5fcec87ba8c51e7e2c6996277dd77bc3fc804a1d563da3"
+      }
+    },
+    "mtp": "~/models/Qwen3.8-Flash-Next-GGUF/MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf (2786204800 bytes, 2026-09-17 12:00)",
+    "sha256": "computed on pluto 2026-10-19 14:43 CDT (sha256sum); the --mtp mtp/rt pack is built from the MTP files listed",
+    "mtp_sha256": {
+      "mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf": "b646ef60eaae2a9ed849e75f15f399629ca22633555e99e809959e95f22a1575",
+      "mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf": "f521868a9e143718bef513772f6e04d9642551e362cf2439636d2abdbd149dfc"
+    }
+  },
+  "same_stack_as_h1": "yes: Strata since 2026-10-05, this model file since 2026-09-23; the H1 rows (2026-10-08 to 2026-10-16) were served by this build and config. The service was restarted on 2026-10-18 19:12 CDT with the same unit."
+}

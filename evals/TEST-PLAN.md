@@ -225,6 +225,136 @@ Consequences, applied as the pre-registered rule says:
 - The task-clustered bootstrap, GLMM and leave-one-task-out analyses (#85) are reported at each
   size's stopping look.
 
+## 1d. Amendment: scorer defect, final-statement scoring, and the status of H1 (2026-10-19; epic #80, issues #95, #97)
+
+Dated and appended; sections 1a–1c are not rewritten. Decisions from CJ on 2026-10-19 (epic #80,
+decisions 8–14), after a 10-lane Flatline Roundtable round 2. Written **before** any row was
+rescored for a paper result; the diagnostic numbers below are labelled as such and are not results.
+
+**The defect (#95).** The active round-3 scorers (`evals/independent/fixed/active/`, sha256-pinned
+in `manifest.json`) contain "hedge" rules that mark an answer down for *showing its work*: several
+dollar amounts anywhere in the text (MasterControl, GLaDOS), a "not"/"or" anywhere next to a second
+number (Neuromancer), "not" followed by any word (SELMA), a status history before the final status
+(Multivac), an office named more than once (SHODAN). The plain-128K arm shows its work; the harness
+arm answers `Name; $X`. The penalty is therefore one-directional. Found on 2026-10-19 while
+answering the roundtable's check for the MasterControl 0/27 plain cell: all 54 plain MasterControl
+rows name the right employee and state the right total and score 0.3; 22 of 41 plain Neuromancer
+zeros end with the right amount written in LaTeX (`\$27{,}039.83`), which the regex cannot read.
+
+**Diagnostic only, not a result.** A one-off format-tolerant rescoring applied identically to both
+arms (not a validated scorer) gives small: harness 127, plain 142 exact, b = 16, c = 31, z = −2.19;
+medium: 104 vs 102, b = 19, c = 17, z = +0.33. Neither crosses the section-1b boundaries. The
+recorded H1 (section 1c) therefore **cannot be reported as a result**.
+
+**Status of H1.** The recorded stops in section 1c stand as the record of what the pre-registered
+procedure did under the round-3 scorers. They are reported in the paper next to the recomputed H1,
+with this deviation disclosed. **The recomputed H1 is not the pre-registered test**: its scorer was
+chosen after the data were seen. It is reported as a corrected estimate with the same pairing, looks
+and boundaries applied for comparability, and labelled as post hoc. #82 stays open; seeds 31–43 are
+not run until the recomputed looks say whether the stop still holds.
+
+**Human check first (#90).** CJ marks every confirmatory pair (432: seeds 4–30, small and medium,
+both arms, arms blinded as A/B, the grader's score revealed only after both marks) on a side-by-side
+sheet. Agreement with the round-3 grader and with the round-4 grader is reported per task and arm,
+every disagreement listed. A key error found there is fixed or dropped for all arms at once and
+logged here.
+
+**The round-4 rule (what the corrected scorers do; `evals/independent/fixed/round4/`).** A scorer
+grades the answer's **final statement**, with the same code for both arms:
+1. Normalise formatting first: LaTeX money and `\boxed{}`, markdown emphasis, code spans, table
+   pipes.
+2. The final segment is the text from the last answer-marker line ("Final answer", "Answer",
+   "Conclusion", "Total", "Therefore", ...) to the end; without a marker, the last paragraph. If the
+   segment holds no candidate of the kind needed (a name when the total line carries only the
+   amount), the whole text is searched for that component.
+3. A hedge is an explicit alternative inside the final segment ("X or Y", "either", "possibly",
+   "cannot determine") with at least two distinct candidates there. Other numbers or names in the
+   working are not a hedge.
+4. A candidate negated within about 20 characters before it ("not $X", "instead of $X") is skipped.
+5. A wrong final answer scores as before. Only the verbosity penalty is removed.
+
+Per task, as drafted (`fixed/round4/`, each self-contained): **MasterControl** takes the last
+clean amount of the final segment (operands of a shown sum and parenthetical asides are skipped)
+and requires the key's name among the names the final segment mentions, else anywhere;
+**Neuromancer** takes the last clean amount of the final segment, equality within half a cent;
+**SELMA** scores 0 when the final segment names people and none is the key, and "Unassigned" is a
+competing candidate; **TheDixieFlatline** drops the "moved from/to" hedge (the destination is the
+answer) and scores 0 when the final segment names a different location; **Multivac** reads the
+*last* status label that is not a history or transition source ("from X to", "originally X"),
+and lets a line break bound the description; **GLaDOS** takes amounts (≥ 10,000, so dates and
+tallies do not count), the outcome and the name from the final segment first, requires a single
+mention of the full name, and scores 0 when the answer was cut off mid-sentence; **SHODAN** uses
+the final segment's or the last clean observation per office and gets a real per-label hedge
+("Alderwick: 0 or 3"); **Cerebex** keeps its authoritative-figure logic on the normalised text and
+follows "+ … = T" chains to the result. "Or"/"either" count as a hedge only between two candidates
+in one clause; uncertainty words ("possibly", "cannot determine") count near a candidate. Candidate
+names are drawn from each generator's own name pools, so "Final Audit Summary" is not a person.
+Partial scores keep their round-3 values (0.2/0.3/0.4/0.5) and still count as not exact.
+
+**One battery exception, declared here.** The audit battery's `previous_location_too` probe
+("It moved from Room 101 to <key>") expects a score below 1.0. Under round 4 it scores 1.0 by
+design: the final statement names the key as the destination, and the harness arm never writes
+this shape, so the round-3 penalty was one-directional. `tests/test_scorer_fairness.py` allows
+exactly this probe for TheDixieFlatline in `fixed/round4/` and nothing else. The other 2,106
+probes raise zero flags.
+
+**Diagnostic recount under the drafts (not a result; the hand-check and CJ's approval come first).**
+Confirmatory pairs, seeds 4–30: small, harness 134 vs plain 148 exact, b = 16, c = 30,
+z = −2.06; medium, harness 117 vs plain 103, b = 22, c = 8, z = +2.56 at 216 pairs, and
+b = 11, c = 2, z = +2.50 at the seed-17 look (112 pairs) where H1-medium actually stopped
+(boundary 3.471). Flips relative to round 3: 111 rows up, 0 down, each read by hand (MasterControl
+54 plain + 7 harness; Neuromancer 22 plain; Multivac 3 plain + 7 harness; SELMA 8 plain; GLaDOS 8
+harness; Cerebex 2 plain; SHODAN and TheDixieFlatline none). Under the drafts the small result
+reverses and the medium result no longer crosses its confirmatory boundary.
+
+**Validation before any paper number.** Each round-4 scorer must (a) pass its own self-test and
+`check.py`; (b) raise zero flags on the audit's scorer battery (now run in CI for `round4/` as well
+as `active/`); (c) reproduce every stored answer key byte for byte (generate() unchanged); (d) be
+hand-read on every row whose exactness it flips relative to round 3, with the verdicts recorded on
+#95; (e) agree with CJ's #90 marks at least as well as round 3 does on every task. A task where (e)
+fails is reported under round 3 and round 4 both, and the disagreement is listed.
+
+**Rescoring.** Rescoring writes new files (`runs/exp-v02/rescored-round4/*.json`, with `old_score`
+and `new_score` per row and the round-4 sha256 set in `meta`), never over the recorded ones.
+`manifest.json` gains a `round4` entry per lane; `active` is switched to round 4 only by CJ's merge
+of the review PR, and every future run records which set scored it. Rows whose plain answer was
+stored truncated at 2,000 characters (57 of 435 confirmatory plain rows; 55 of them `length` rows
+with no final statement) are rescored on the stored text and flagged `rescore_truncated`.
+
+**Reporting the unfinished rows (decision 9; #85).** The pre-registered primary stands: every pair
+counts and an arm with no answer is wrong. Excluding pairs where plain's prompt `does_not_fit` is a
+labelled **secondary** (decided before either arm ran). Excluding plain `length` rows, harness
+`max_iterations`/`timeout` rows, and "both arms finished" are **sensitivity only** (the arm caused
+the exclusion; no inference). Completion rate is reported per arm. The headline is task-conditional:
+the per-task table and leave-one-task-out estimates are reported with every H1 number.
+
+**Engine (decision 8; #97).** Every remaining paper run stays on the stack recorded in
+`runs/replay/stackA-provenance.json` (Strata a4b679b1, `strata-flashnext.json`, huihui Flash-Next
+UD-Q4_K_XL). Before any engine change a temperature-0 replay set (seeds 4–6, 8 tasks, small and
+medium, 144 requests: plain, harness root turn 1, one sub-call shape) is captured twice on this
+stack; the A-vs-A agreement is the engine noise floor any other build is judged against. Rows from
+two engines are never pooled. Baselines (#83, #84) and #69 wait until the round-4 scorers are
+approved.
+
+**1d-i. Addendum, 2026-10-23 (CJ; epic #80 decision 15).** Section 1d approved by CJ and merged
+(PR #99). Two changes, appended rather than rewritten above:
+
+- **The #90 human check is a human-validated LLM judge**, replacing "CJ marks every confirmatory
+  pair". Fable graded all 432 pairs (864 answers) blind: answer key and answer only, opaque ids,
+  no arm and no score. CJ then marks a short blinded sheet: 40 pairs sampled at least one per task
+  and size (partial-score and arm-disagreement pairs first), plus up to 3 pairs per task/arm cell
+  where Fable and the round-3 grader disagree (22 pairs; 62 in all). Reported: round-3 grader vs
+  Fable on all 864 answers, round-4 grader vs Fable, and CJ vs Fable and CJ vs each grader on his
+  sample, per task and arm. Fable helped build the pipeline, so its grades are not human
+  verification without CJ's sample. First judge pass (diagnostic): round-3 grader and Fable agree
+  on 627/765 decided answers (82.0%); all 138 disagreements are Fable-correct / grader-not-exact
+  (plain 102, harness 36). Detail on #90.
+- **When `active` switches.** Validation (e) above now reads "agree with CJ's #90 sample and with
+  the Fable judge at least as well as round 3 does on every task". `manifest.json`'s `active` set
+  stays round 3 until (a)–(e) are met; merging this section approves the rule and the candidates,
+  not the switch. Rescoring into `runs/exp-v02/rescored-round4/` proceeds now, and the recomputed
+  H1 is labelled post hoc as above.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:

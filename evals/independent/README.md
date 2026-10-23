@@ -207,4 +207,57 @@ To re-score rows produced before this round:
 `uv run python evals/independent/run_eval.py --rescore FILE [--out NEW]`. It writes
 `FILE.rescored.json` plus a summary, and records `old_score` / `new_score` on every row.
 
+## Round 4 (scorer-only, 2026-10-19; under review, NOT active)
+
+Issue #95. The round-3 scorers penalise an answer for *showing its work*: several dollar
+amounts anywhere in the text (MasterControl, GLaDOS), a "not" or "or" anywhere next to a
+second number (Neuromancer), "not" followed by any word (SELMA), a status history before the
+final status (Multivac), an office named more than once (SHODAN). The plain-128K arm shows
+its work and the harness answers `Name; $X`, so the penalty fell on one arm. Found while
+checking why plain scored 0/27 on MasterControl: all 54 plain rows name the right employee
+and state the right total, and all 54 scored 0.3.
+
+`fixed/round4/` holds one candidate per lane. Each scores the answer's **final statement**
+(see `evals/TEST-PLAN.md` section 1d for the full rule):
+
+1. formatting is normalised first (LaTeX money and `\boxed{}`, markdown emphasis, code
+   spans, table pipes);
+2. the final segment is the text from the last answer-marker line ("Final answer",
+   "Answer", "Conclusion", "Total", "Therefore", ...) to the end, else the last paragraph;
+   a component missing from the segment is sought in the whole text;
+3. a hedge is an explicit alternative inside that segment ("X or Y", "either", "possibly",
+   "cannot determine") with two or more distinct candidates there;
+4. a candidate negated just before it ("not $X", "instead of $X") is skipped;
+5. a wrong final answer scores as before. Only the verbosity penalty goes.
+
+**Contexts, questions and answer keys are unchanged.** `generate()` is byte-identical in
+every lane (the diagnostic reproduces every stored key). Each candidate passes its own
+self-test, `check.py` and the scorer battery (now run in CI for `fixed/round4/` as well as
+`fixed/active/` by `tests/test_scorer_fairness.py`).
+
+Exact counts on the confirmatory H1 rows (seeds 4–30), round 3 → round 4, harness / plain:
+
+| Task | small harness | small plain | medium harness | medium plain |
+|---|---|---|---|---|
+| GLaDOS | 6 → 11 | 0 → 0 | 0 → 3 | 0 → 0 |
+| SHODAN | 2 → 2 | 21 → 21 | 0 → 0 | 0 → 0 |
+| TheDixieFlatline | 0 → 0 | 1 → 1 | 1 → 1 | 1 → 1 |
+| Cerebex | 25 → 25 | 23 → 25 | 16 → 16 | 18 → 18 |
+| Neuromancer | 22 → 22 | 4 → 22 | 22 → 22 | 9 → 13 |
+| SELMA | 26 → 26 | 21 → 25 | 27 → 27 | 21 → 25 |
+| MasterControl | 24 → 27 | 0 → 27 | 23 → 27 | 0 → 27 |
+| Multivac | 20 → 21 | 24 → 27 | 15 → 21 | 19 → 19 |
+
+111 rows flip up and none down; every flip was read by hand (issue #95). The one battery
+exception (TheDixieFlatline `previous_location_too`) is declared in TEST-PLAN 1d.
+
+**Status.** Round 4 is a proposal. `manifest.json` lists it under `round4` per lane and keeps
+`active` on round 3 until CJ approves the TEST-PLAN 1d amendment and the #90 hand-check has
+been compared against both graders. Rescoring, when approved, writes new files under
+`runs/exp-v02/rescored-round4/` with `old_score` / `new_score` per row and never touches the
+recorded ones. The recomputed H1 is reported beside the recorded one and labelled post hoc.
+
+To rescore with the candidates for diagnosis only:
+`uv run python evals/independent/rescore_round4.py runs/exp-v02/plain-131k.json --out runs/exp-v02/rescored-round4/plain-131k.json`.
+
 *Proudly Made in Nebraska. Go Big Red! 🌽 <https://xkcd.com/2347/>*
