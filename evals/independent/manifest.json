@@ -44,13 +44,20 @@
       ],
       "active": {
         "file": "fixed/active/GLaDOS.py",
-        "sha256": "27f5066cfc517f7be7d061427e72ddf3d4a3196cb9f06fdc0dfe6dad9016258d",
-        "source": "round-3 minimax fix"
+        "sha256": "da3543de55fc2d58d1cf3ffa7daeb256b80a4907c9c972e6adc89d1c21ce0c3f",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "27f5066cfc517f7be7d061427e72ddf3d4a3196cb9f06fdc0dfe6dad9016258d",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/GLaDOS.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/GLaDOS.py",
         "sha256": "da3543de55fc2d58d1cf3ffa7daeb256b80a4907c9c972e6adc89d1c21ce0c3f",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -91,13 +98,20 @@
       ],
       "active": {
         "file": "fixed/active/SHODAN.py",
-        "sha256": "c0a8d0658ed465bb599f0ba399d2fce36c12b2bf4cb5a318036acc5e1787467e",
-        "source": "round-3 minimax fix"
+        "sha256": "a02d4d7e515ea17f9db0d0a99ae9a3ad61ceed258fef18e684db859902e46e90",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "c0a8d0658ed465bb599f0ba399d2fce36c12b2bf4cb5a318036acc5e1787467e",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/SHODAN.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/SHODAN.py",
         "sha256": "a02d4d7e515ea17f9db0d0a99ae9a3ad61ceed258fef18e684db859902e46e90",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -158,13 +172,20 @@
       ],
       "active": {
         "file": "fixed/active/TheDixieFlatline.py",
-        "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
-        "source": "round-3 minimax fix"
+        "sha256": "602875efe81ad15e29570059d66108118f4fcbf6806ee2d2c077356aa49fd5f1",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "671919fda9670c028b6a1ce05c37160f3864b3371b0f3528bf66a922b2a7c83e",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/TheDixieFlatline.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/TheDixieFlatline.py",
         "sha256": "602875efe81ad15e29570059d66108118f4fcbf6806ee2d2c077356aa49fd5f1",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -228,13 +249,20 @@
       ],
       "active": {
         "file": "fixed/active/Cerebex.py",
-        "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
-        "source": "round-3 minimax fix"
+        "sha256": "1afefa5dba2fef38e1ea4ec15f79123b742a47711453a0b235f5d999ff984d45",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/Cerebex.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/Cerebex.py",
         "sha256": "1afefa5dba2fef38e1ea4ec15f79123b742a47711453a0b235f5d999ff984d45",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -290,13 +318,20 @@
       ],
       "active": {
         "file": "fixed/active/Neuromancer.py",
-        "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
-        "source": "round-3 self-fix"
+        "sha256": "4bd8a9ae039b9e1a8c4daceed42fe8be95f5fb117bbbc8054b87358894960c4b",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "7db9304f2b71b65a35329c04f6331e5b341e154b145828e8ff56f1cc0a23b2ee",
+          "source": "round-3 self-fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/self/Neuromancer.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/Neuromancer.py",
         "sha256": "4bd8a9ae039b9e1a8c4daceed42fe8be95f5fb117bbbc8054b87358894960c4b",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -372,13 +407,20 @@
       ],
       "active": {
         "file": "fixed/active/SELMA.py",
-        "sha256": "df2255c9cad6fb201892071cc8474084b8aca1fb00f75a2b357479ed0f0d9add",
-        "source": "round-3 minimax fix"
+        "sha256": "bbd3c7e69b7778717d51653dc4b66d4e311ecb75df5048ce07c6f85b2809af22",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "df2255c9cad6fb201892071cc8474084b8aca1fb00f75a2b357479ed0f0d9add",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/SELMA.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/SELMA.py",
         "sha256": "bbd3c7e69b7778717d51653dc4b66d4e311ecb75df5048ce07c6f85b2809af22",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -454,13 +496,20 @@
       ],
       "active": {
         "file": "fixed/active/MasterControl.py",
-        "sha256": "1b6ac56e8e7b425511c5611596cd194c9604ce316c5146edd9d57ec73e99e360",
-        "source": "round-3 minimax fix"
+        "sha256": "590ecabb190b10056d01b5c2fcd427b995a6ddf642fa1c06dc86f5ba28c58c2e",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "1b6ac56e8e7b425511c5611596cd194c9604ce316c5146edd9d57ec73e99e360",
+          "source": "round-3 minimax fix",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/minimax/MasterControl.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/MasterControl.py",
         "sha256": "590ecabb190b10056d01b5c2fcd427b995a6ddf642fa1c06dc86f5ba28c58c2e",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -538,20 +587,28 @@
           "defect": "scorer only: a correct 'R142: <description> — Status: X' answer scored 0.2 (the description boundary check rejected a dash/bullet/markdown-separated status field), later-paragraph status history counted as a hedge, and the req id matched as a prefix",
           "found_by": "v0.2 experiment (runs/exp-v02), issue #63",
           "by": "Claude Code (Opus 5.5), scorer-only edit to score()",
-          "file": "fixed/active/Multivac.py",
+          "file": "fixed/round3/scorer-3.1/Multivac.py",
           "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
-          "result": "pass (self-test, byte-identical generate() for every size x seeds 0-9, scorer_battery.py 0 flags)"
+          "result": "pass (self-test, byte-identical generate() for every size x seeds 0-9, scorer_battery.py 0 flags)",
+          "moved": "2026-10-23: preserved here when active switched to round 4 (was fixed/active/Multivac.py)"
         }
       ],
       "active": {
         "file": "fixed/active/Multivac.py",
-        "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
-        "source": "round-3 minimax fix + round-3.1 scorer fix (#63)"
+        "sha256": "6ab597fc59af4895c75f3d6e80bfa6d38b3f1dab7cd966fca389bf899acba6c5",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
+        "switched": "2026-10-23",
+        "previous": {
+          "sha256": "bc174de961ff9688ff499a42abbf16c57e444c0e10e4c1accb63912eebe2ef4c",
+          "source": "round-3 minimax fix + round-3.1 scorer fix (#63)",
+          "retired": "2026-10-23",
+          "file": "fixed/round3/scorer-3.1/Multivac.py"
+        }
       },
       "round4": {
         "file": "fixed/round4/Multivac.py",
         "sha256": "6ab597fc59af4895c75f3d6e80bfa6d38b3f1dab7cd966fca389bf899acba6c5",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); candidate under review, not active",
+        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
       }
@@ -560,5 +617,6 @@
   "active_set_note": "fixed/active/ holds the version of each task used for evaluation: the original when it passed, else the original author's own fix when it passed, else the MiniMax fix. All pass check.py and the Docker validator. Prefer the author's own fix to keep authorship independent.",
   "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run.",
   "round3_note": "Round 3 (2026-10-08): fixes for the independent audit (audit/REPORT.md): Cerebex hidden-division key, SELMA date/order contradiction, TheDixieFlatline missing CORRECTION email, MasterControl/Neuromancer wording, and scorer fairness in all 8. Verified: check.py, each self-test, audit/scripts/scorer_battery.py (1,701 probes, 0 flags), the SELMA and Dixie text solvers, and byte-identical generation for the scorer-only tasks (GLaDOS, SHODAN, Multivac). Earlier #22 runs used the pre-round-3 set.",
-  "round3_1_note": "Round 3.1 (2026-10-08, issue #63): scorer-only fix to Multivac score(). Contexts, questions and answer keys are unchanged (byte-identical generate() output for every size x seeds 0-9). Probes for the 'ID: value' shapes were added to audit/scripts/scorer_battery.py for all 8 tasks (0 flags); no other scorer changed. Rows scored before this can be re-scored with run_eval.py --rescore FILE."
+  "round3_1_note": "Round 3.1 (2026-10-08, issue #63): scorer-only fix to Multivac score(). Contexts, questions and answer keys are unchanged (byte-identical generate() output for every size x seeds 0-9). Probes for the 'ID: value' shapes were added to audit/scripts/scorer_battery.py for all 8 tasks (0 flags); no other scorer changed. Rows scored before this can be re-scored with run_eval.py --rescore FILE.",
+  "round4_note": "Round 4 (2026-10-19, issue #95; PR #99): scorer-only final-statement scoring, generate() byte-identical. Switched to active 2026-10-23 (CJ, epic #80 decision 16) after validation (a)-(e): on CJ's 40-pair #90 sample round 4 agrees with CJ on 71/77 answers vs 59/77 for round 3 and is >= round 3 on every task; against the Fable judge on all 765 decided answers round 4 agrees on 738 vs 627 and is >= round 3 on every task. Rows scored before the switch carry active_source 'round-3 ...'; runs/exp-v02/rescored-round4/ is the round-4 view of them."
 }

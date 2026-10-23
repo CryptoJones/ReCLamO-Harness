@@ -434,104 +434,222 @@ def generate(seed: int, size: str) -> Dict[str, Any]:
         "meta": meta
     }
 
-def score(answer_text: str, truth) -> float:
-    """Robust scorer for SELMA.
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
 
-    - 1.0 when the answer unambiguously states the truth (case-insensitive,
-      tolerant of formatting, prose wrapping, quotes, JSON, markdown, etc.)
-      AND does NOT name a competing candidate as the "final" or "current" owner.
-    - 0.3 when the answer hedges (names a competing candidate alongside the
-      truth, or denies the truth while naming another).
-    - 0.0 when nothing of substance is found, or a different name is named
-      as the answer.
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+# --- round-4 lane helpers (this file only; same text in every round-4 scorer that uses them) ---
+_R4_ALT_ANY = _re4.compile(
+    r"\b(?:possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b",
+    _re4.IGNORECASE,
+)
+_R4_ALT_LINK = _re4.compile(r"\b(?:or|either|alternatively)\b", _re4.IGNORECASE)
+
+
+def _r4_hedged(segment: str, spans) -> bool:
+    """Rule 3, read strictly: at least two DISTINCT candidates in the segment AND the
+    alternative is offered between them ("X or Y", "either X or Y"), or the segment declares
+    uncertainty outright ("possibly", "cannot be determined"). A bare "or" elsewhere in the
+    segment ("unassigns or reassigns", "denied or withdrawn") is not a hedge.
+    spans: iterable of (start, end, key) for candidate occurrences inside segment."""
+    spans = list(spans)
+    keys = {k for _, _, k in spans}
+    if len(keys) < 2 or not _r4_explicit_alternative(segment):
+        return False
+    if _R4_ALT_ANY.search(segment):
+        return True
+    ordered = sorted(spans, key=lambda x: (x[0], x[1]))
+    for (s1, e1, k1), (s2, e2, k2) in zip(ordered, ordered[1:]):
+        if k1 != k2 and s2 - e1 <= 80 and _R4_ALT_LINK.search(segment[e1:s2]):
+            return True
+    return False
+
+
+def _r4_lead(text: str) -> str:
+    """Answer-first layout: a short standalone first line ("**Unassigned**", "**Room 130**",
+    "**$4,311.31**") followed by the explanation. Returned only when the text has more than
+    one paragraph, the first paragraph is a single line of at most 80 chars, and no answer
+    marker ("Final answer", "Therefore", ...) opens a later line (that later line is then the
+    final statement, not the lead); else ""."""
+    t = text.strip()
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    if len(paras) < 2:
+        return ""
+    first = paras[0].strip()
+    if "\n" in first or len(first) > 80:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None and last.start() >= len(first):
+        return ""
+    return first
+# --- end round-4 lane helpers ---
+
+
+_R4_PERSON = _re4.compile(
+    r"\b(" + "|".join(FIRST_NAMES) + r")\s+(" + "|".join(LAST_NAMES) + r")\b", _re4.IGNORECASE
+)
+_R4_PERSON_LF = _re4.compile(
+    r"\b(" + "|".join(LAST_NAMES) + r"),\s+(" + "|".join(FIRST_NAMES) + r")\b", _re4.IGNORECASE
+)
+_R4_UNASSIGNED = _re4.compile(r"\bunassigned\b", _re4.IGNORECASE)
+_R4_ASSIGNED = _re4.compile(r"\bassigned\b", _re4.IGNORECASE)
+_R4_NOT_UNASSIGNED = _re4.compile(r"\b(?:not|never)\s+unassigned\b", _re4.IGNORECASE)
+_R4_NOBODY = _re4.compile(r"\b(none|no\s+one|nobody|nothing|empty|vacant|unfilled)\b", _re4.IGNORECASE)
+_R4_OWNER_IS = _re4.compile(
+    r"\b(?:final|current|new|latest|now|true|actual|real)\s+(?:final\s+)?owner\s+is\s+"
+    r"([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)"
+)
+
+
+def _r4_persons(text: str):
+    """Occurrences of names drawn from the generator's FIRST_NAMES x LAST_NAMES pool, in
+    first-last or last-first form, any case; key is 'first last' lowercased."""
+    out = [(m.start(), m.end(), (m.group(1) + " " + m.group(2)).lower()) for m in _R4_PERSON.finditer(text)]
+    out += [(m.start(), m.end(), (m.group(2) + " " + m.group(1)).lower()) for m in _R4_PERSON_LF.finditer(text)]
+    return out
+
+
+def _r4_unassigned_verdict(scope: str):
+    """1.0 / 0.3 / 0.0 when scope states the position is unassigned (or nobody holds it);
+    None when scope says nothing about that."""
+    if _R4_NOT_UNASSIGNED.search(scope):
+        return 0.0
+    marks = [(m.start(), m.end(), "unassigned") for m in _R4_UNASSIGNED.finditer(scope)]
+    if not marks:
+        marks = [(m.start(), m.end(), "unassigned") for m in _R4_NOBODY.finditer(scope)]
+    if not marks:
+        return None
+    # Competing candidates for the hedge test: pool names and the bare status "assigned"
+    # ("Assigned or Unassigned" is an explicit alternative).
+    others = _r4_persons(scope) + [(m.start(), m.end(), "assigned") for m in _R4_ASSIGNED.finditer(scope)]
+    return 0.3 if _r4_hedged(scope, marks + others) else 1.0
+
+
+def score(answer_text: str, truth) -> float:
+    """Round-4 scorer for SELMA: grades the FINAL STATEMENT.
+
+    - 1.0 when the truth (name in either order, any case, or "Unassigned" / "no one") is
+      present and the final segment does not name a different person as the answer.
+    - 0.3 when the final segment offers an explicit alternative between two candidates
+      ("either X or Y").
+    - 0.0 when the truth is absent, when "the final/current owner is X" names someone else
+      (whole text), when "not <truth>" denies it, or when the final statement names only
+      other people (a wrong final answer is wrong even if the working mentioned the truth).
+    A history of earlier owners in the working is not a hedge; the word "not" is not a hedge.
     """
     if not isinstance(answer_text, str) or not answer_text.strip():
         return 0.0
-
-    text = answer_text.strip()
-    text_low = text.lower()
-
-    if truth == "Unassigned":
-        truth_low = "unassigned"
-        truth_words = ["unassigned"]
-    else:
-        truth_low = truth.lower().strip()
-        truth_words = truth_low.split()
-
-    # Detect hedge words that would suggest competing candidates.
-    hedge_patterns = [
-        r"\b(either|or|alternatively|possibly|probably|maybe|perhaps|"
-        r"could be|might be|not\s+\w+)\b",
-    ]
-    has_hedge_word = any(
-        re.search(pat, text_low) for pat in hedge_patterns
-    )
-
-    # For "Unassigned" truth, look for the word "unassigned" in the answer.
-    if truth == "Unassigned":
-        if re.search(r"\bunassigned\b", text_low):
-            # If the answer also says "not unassigned" or hedges, drop below 1.0.
-            if re.search(r"\bnot\s+unassigned\b|\bnever\s+unassigned\b", text_low):
-                return 0.0
-            if has_hedge_word:
-                return 0.3
-            return 1.0
-        # "None" / "No one" / "nobody" / "empty" are also valid unassigned phrasings.
-        if re.search(r"\b(none|no\s+one|nobody|nothing|empty|vacant|unfilled)\b", text_low):
-            if has_hedge_word:
-                return 0.3
-            return 1.0
-        # Otherwise wrong (the answer names someone or is gibberish).
+    norm = _r4_normalize(answer_text).strip()
+    if not norm:
         return 0.0
+    low = norm.lower()
+    seg = _r4_segment(norm)
+    persons_seg = _r4_persons(seg)
 
-    # Truth is a name. Check for the full name (case-insensitive) anywhere in
-    # the answer, OR last-first form.
+    if truth == "Unassigned":
+        verdict = _r4_unassigned_verdict(seg)
+        if verdict is not None:
+            return verdict
+        lead = _r4_lead(norm)
+        if lead:
+            verdict = _r4_unassigned_verdict(lead)
+            if verdict is not None:
+                return verdict
+        if persons_seg:
+            return 0.0  # the final statement names a person instead
+        verdict = _r4_unassigned_verdict(norm)
+        return verdict if verdict is not None else 0.0
+
+    truth_low = truth.lower().strip()
+    truth_words = truth_low.split()
     name_variants = [truth_low]
     if len(truth_words) == 2:
-        last_first = truth_words[1] + ", " + truth_words[0]
-        name_variants.append(last_first)
-    truth_present = any(v in text_low for v in name_variants)
-
-    if not truth_present:
+        name_variants.append(truth_words[1] + ", " + truth_words[0])
+    if not any(v in low for v in name_variants):
+        return 0.0
+    if _re4.search(r"\bnot\s+" + _re4.escape(truth_low), low):
+        return 0.0
+    # "the final/current owner is X" pointing at a competing candidate (whole text).
+    owner_is = [s.lower() for s in _R4_OWNER_IS.findall(norm)]
+    if owner_is and any(p != truth_low for p in owner_is):
         return 0.0
 
-    # Find other candidate names mentioned in the answer (Title-Case multi-word).
-    other_name_pattern = re.compile(
-        r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)\b"
-    )
-    other_candidates = [
-        n.lower() for n in other_name_pattern.findall(text)
-    ]
-    other_candidates = [
-        n for n in other_candidates
-        if n != truth_low and n not in name_variants
-    ]
+    # Candidates in the final segment: pool names plus "Unassigned" (a competing answer).
+    def _cands(scope):
+        return _r4_persons(scope) + [(m.start(), m.end(), "unassigned") for m in _R4_UNASSIGNED.finditer(scope)]
 
-    # Check whether the answer says "the final owner is X" or "current owner is X"
-    # pointing at a competing candidate.
-    is_phrases = re.findall(
-        r"\b(?:final|current|new|latest|now|true|actual|real|new)\s+"
-        r"(?:final\s+)?owner\s+is\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+(?:-[A-Z][a-z]+)?)",
-        text,
-    )
-    is_phrases_low = [s.lower() for s in is_phrases]
-    # If the answer names a competing candidate as "the final/current owner",
-    # the answer is wrong about the truth.
-    if is_phrases_low and any(p != truth_low for p in is_phrases_low):
-        return 0.0
-
-    # If the answer says "moved from <truth> to <other>; the final owner is <other>"
-    # this is a hedge that explicitly picks the wrong person.
-    if other_candidates and has_hedge_word:
-        # Look for a hedge that resolves to a competing candidate.
-        denial = re.search(
-            r"\bnot\s+" + re.escape(truth_low), text_low
-        )
-        if denial:
-            return 0.0
-        return 0.3
-
-    return 1.0
+    cands = _cands(seg)
+    if cands and truth_low not in {k for _, _, k in cands}:
+        lead = _r4_lead(norm)
+        lead_cands = _cands(lead) if lead else []
+        if lead_cands and truth_low in {k for _, _, k in lead_cands}:
+            seg, cands = lead, lead_cands
+        else:
+            return 0.0  # the final statement picks someone else (or "Unassigned")
+    if cands:
+        return 0.3 if _r4_hedged(seg, cands) else 1.0
+    # The final segment holds no candidate (e.g. "FINLEY JONES", "Jones, Finley"): widen.
+    return 0.3 if _r4_hedged(norm, _cands(norm)) else 1.0
 
 if __name__ == "__main__":
     # Print stats for seed 0 at each size
@@ -667,3 +785,68 @@ if __name__ == "__main__":
                 f"SELMA positive {k!r} should score 1.0 (seed={seed}); got {sc}"
             )
     print("SELMA: scorer regression battery PASS (formats in).")
+
+    # ----- Round 4 (issue #95): final-statement scoring -----
+    # A history of earlier owners ("was assigned to X, then declined, then reassigned"), a
+    # timeline table, a \boxed{} answer and the bold "The final owner ... is X from Dept."
+    # sentence all score 1.0 when the final statement is right. "unassigns or reassigns" is
+    # not a hedge. A final statement that names someone else is 0.0 even when the truth was
+    # mentioned in the working; "either A or B" in the final segment is 0.3.
+    for seed in range(5):
+        d = generate(seed, "small")
+        t = d["answer"]
+        o = "Alex Smith" if t != "Alex Smith" else "Blake Taylor"
+        o2 = "Casey Brown" if t != "Casey Brown" else "Dana Jones"
+        if t == "Unassigned":
+            r4_pos = {
+                "history_then_final": (f"The role was first assigned to {o}, then {o} declined, then {o2} took over "
+                                       f"and the review was cancelled.\n\nFinal answer: Unassigned"),
+                "table_then_final": (f"| Date | Event | Owner |\n|---|---|---|\n| 2024-01-01 | assigned | {o} |\n"
+                                     f"| 2025-01-01 | reassigned | {o2} |\n| 2026-01-01 | cancelled | Unassigned |\n\n"
+                                     f"**Final owner: Unassigned**"),
+                "boxed": "\\boxed{\\text{Unassigned}}",
+                "assigns_or_reassigns": (f"The last email (from {o}) says the position is now unassigned, and no later "
+                                         f"email assigns or reassigns the role."),
+                "answer_first_then_explanation": (f"**Unassigned**\n\nThe last email, from {o}, cancelled the review "
+                                                  f"after {o2} had declined the role."),
+                "therefore_line": (f"{o} was assigned, then declined.\n\nTherefore, the final owner is: **Unassigned**."),
+                "not_in_working": (f"The correction says the review is under Legal, not Compliance, and {o} declined.\n\n"
+                                   f"**Unassigned**"),
+            }
+            r4_neg = {
+                "either_in_final": (f"Final answer: either {o} or Unassigned", 0.3),
+                "wrong_final_truth_in_working": (f"The thread says the position was unassigned at one point.\n\n"
+                                                 f"Final answer: {o}", 0.0),
+                "not_unassigned": (f"It is not unassigned; the owner is {o}.", 0.0),
+            }
+        else:
+            r4_pos = {
+                "history_then_final": (f"The role was first assigned to {o}, then {o} declined, then {o2} took over, "
+                                       f"then it was reassigned.\n\nFinal answer: {t}"),
+                "table_then_final": (f"| Date | Event | Owner |\n|---|---|---|\n| 2024-01-01 | assigned | {o} |\n"
+                                     f"| 2025-01-01 | declined | Unassigned |\n| 2026-01-01 | assigned | {t} |\n\n"
+                                     f"**Final owner: {t}**"),
+                "boxed": f"\\boxed{{\\text{{{t}}}}}",
+                "unassigns_or_reassigns": (f"The most recent assignment email (from {o}) assigns the review to **{t}**, "
+                                           f"and no subsequent email unassigns or reassigns the role."),
+                "bold_final_sentence_with_dept": f"**The final owner responsible for the AI Ethics Review is {t} from Operations.**",
+                "answer_first_then_explanation": (f"**{t}**\n\nThe last email, from {o}, confirmed the assignment after "
+                                                  f"{o2} had declined the role."),
+                "not_in_working": (f"The correction says the review is under Legal, not Compliance; {t} remains the lead.\n\n"
+                                   f"**{t}**"),
+                "quoted_email_then_final": (f"The latest email, from {o}, states:\n\n> \"Effective immediately, {t} from "
+                                            f"Marketing will be taking over.\"\n\nThe final owner is **{t}** (from Marketing)."),
+            }
+            r4_neg = {
+                "either_in_final": (f"Final answer: either {o} or {t}", 0.3),
+                "wrong_final_truth_in_working": (f"The thread names {t} as lead at one point.\n\nFinal answer: {o}", 0.0),
+                "owner_is_other": (f"Ownership moved from {t} to {o}; the final owner is {o}.", 0.0),
+                "unassigned_final_truth_in_working": (f"{t} was assigned on May 1.\n\nFinal answer: Unassigned", 0.0),
+            }
+        for k, s in r4_pos.items():
+            sc = score(s, t)
+            assert sc == 1.0, f"SELMA round-4 positive {k!r} should score 1.0 (seed={seed}, truth={t!r}); got {sc}"
+        for k, (s, want) in r4_neg.items():
+            sc = score(s, t)
+            assert sc == want, f"SELMA round-4 negative {k!r} should score {want} (seed={seed}, truth={t!r}); got {sc}"
+    print("SELMA: round-4 final-statement assertions PASS (history is not a hedge; wrong finals stay wrong).")

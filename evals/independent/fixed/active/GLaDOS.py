@@ -1301,6 +1301,68 @@ def generate(seed: int, size: str) -> dict[str, Any]:
     return {"context": context, "question": question, "answer": answer, "meta": meta}
 
 
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
+
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+
 def _extract_ints(text: str) -> set[int]:
     """All integer interpretations present in the text.
 
@@ -1351,8 +1413,10 @@ def _name_hit(text: str, truth: dict[str, Any]) -> bool:
             return True
     parts = _norm(truth["certifying_member"]).split()
     if len(parts) >= 2:
-        tokens = set(t.split())
-        if parts[0] in tokens and parts[-1] in tokens:
+        # Round 4 (issue #95): first and last name tokens must belong to ONE mention
+        # (at most two tokens between them). "Victor Calderon ... Iris Vargas" is not
+        # "Victor Calderon-Vargas"; the active token-set test accepted it.
+        if re.search(r"\b" + re.escape(parts[0]) + r"\b(?:\s+\w+){0,2}\s+" + re.escape(parts[-1]) + r"\b", t):
             return True
     return False
 
@@ -1404,58 +1468,6 @@ def _outcome_hit(text: str, truth: dict[str, Any]) -> bool:
     return neg_hits > pos_hits
 
 
-def _name_hedge(text: str, truth: dict[str, Any]) -> float:
-    """1.0 for a single matching name, 0.5 for hedging, 0.0 for absent/wrong."""
-    t = _norm(text)
-    truth_names = [v for v in (truth.get("name_variants") or []) if v] or [
-        truth["certifying_member"]
-    ]
-    truth_names_low = [_norm(v) for v in truth_names]
-
-    # Does any variant of the truth name appear?
-    matched = any(n in t for n in truth_names_low)
-    # Split truth name into first and last tokens; both must be present
-    # unless the variant itself is a single token.
-    truth_first_last = []
-    for n in truth_names_low:
-        parts = n.split()
-        if len(parts) >= 2:
-            truth_first_last.append((parts[0], parts[-1]))
-    token_set = set(t.split())
-    fallback_match = any(
-        f in token_set and l in token_set
-        for f, l in truth_first_last
-    )
-    matched = matched or fallback_match
-    if not matched:
-        return 0.0
-
-    # Look for additional named persons. The names we already accept must
-    # come from the truth. Anything else, especially when paired with hedge
-    # words, is a shotgun-style answer.
-    # Pull out "First Last" or "First-Last" capitalised tokens.
-    other_caps = re.findall(
-        r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,2}(?:-[A-Z][a-z]+)?\b", text
-    )
-    extra = set()
-    for cap in other_caps:
-        ln = _norm(cap)
-        if ln in truth_names_low:
-            continue
-        # ignore phrase fragments that contain a truth name
-        if any(n in ln for n in truth_names_low):
-            continue
-        # ignore generic role phrases (we keep matching "the Treasurer" etc.)
-        if ln.startswith("the ") or ln.startswith("board ") or "trustee" in ln:
-            continue
-        extra.add(cap)
-    hedge_word = bool(_HEDGE_BOTH.search(text))
-
-    if len(extra) >= 1 and hedge_word:
-        return 0.5
-    return 1.0
-
-
 def _amount_in_million_form(text: str, target: int) -> bool:
     """Treat "$1.59 million" as a valid statement of 1_587_550-style truth.
 
@@ -1476,38 +1488,235 @@ def _amount_in_million_form(text: str, target: int) -> bool:
     return False
 
 
+# Round 4: an "explicit alternative between candidates" is an uncertainty word within 80
+# characters of a candidate while the final segment holds two distinct candidates, or an
+# "or"/"alternatively" with a candidate within 40 characters on each side and no sentence
+# punctuation in between. "withdrawn or vacated" next to a shown sum is not a hedge.
+_R4_UNCERTAIN = re.compile(
+    r"\b(?:either|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain|candidates?|one\s+of)\b",
+    re.IGNORECASE,
+)
+_R4_OR = re.compile(r"\b(?:or|alternatively)\b", re.IGNORECASE)
+
+
+def _r4_alt_between(segment: str, spans: list[tuple[int, int, Any]], require_truth: bool = False) -> bool:
+    """require_truth: the alternative must involve the truth candidate itself (used for
+    names, where the other side may be any capitalised phrase, person or not)."""
+    if len({v for _, _, v in spans}) < 2:
+        return False
+    for m in _R4_UNCERTAIN.finditer(segment):
+        near = [v for s, e, v in spans if abs(m.start() - e) <= 80 or abs(s - m.end()) <= 80]
+        if near and (not require_truth or "truth" in near):
+            return True
+    for m in _R4_OR.finditer(segment):
+        before = {v for s, e, v in spans if 0 <= m.start() - e <= 40 and not re.search(r"[.;:!?]", segment[e:m.start()])}
+        after = {v for s, e, v in spans if 0 <= s - m.end() <= 40 and not re.search(r"[.;:!?]", segment[m.end():s])}
+        if before and after and len(before | after) >= 2 and (not require_truth or "truth" in (before | after)):
+            return True
+    return False
+
+
+def _r4_amount_spans(text: str) -> list[tuple[int, int, int]]:
+    """Dollar-sized integers (>= 10,000, or any 'X million' form) with their spans."""
+    out: list[tuple[int, int, int]] = []
+    text2 = text.replace("−", "-")
+    skip: list[tuple[int, int]] = []
+    for m in re.finditer(r"(-?\$?\d[\d,]*(?:\.\d+)?)\s*(thousand|million|billion)\b", text2, re.IGNORECASE):
+        skip.append((m.start(1), m.end(1)))
+        try:
+            base = float(m.group(1).replace("$", "").replace(",", ""))
+        except ValueError:
+            continue
+        mult = {"thousand": 1_000, "million": 1_000_000, "billion": 1_000_000_000}[m.group(2).lower()]
+        out.append((m.start(), m.end(), int(round(base * mult))))
+    for m in re.finditer(r"(-?\$?\d[\d,]*(?:\.\d+)?)", text2):
+        if any(s <= m.start() < e for s, e in skip):
+            continue
+        clean = m.group().replace("$", "").replace(",", "")
+        try:
+            val = int(round(float(clean)))
+        except ValueError:
+            continue
+        if abs(val) >= 10_000:
+            out.append((m.start(), m.end(), val))
+    return out
+
+
+# Words that make a capitalised phrase a programme, place, role or heading, not a person.
+_R4_NOT_PERSON = {
+    "program", "programme", "extension", "route", "span", "night", "owl", "circulator", "shuttle",
+    "skip", "stop", "restart", "revival", "relaunch", "rehab", "replacement", "shelter", "work",
+    "works", "depot", "roof", "riverline", "evening", "morning", "frequency", "harbor", "lockport",
+    "westwharf", "baymill", "ridgeline", "oakbridge", "bylaw", "finance", "sop", "board", "general",
+    "counsel", "manager", "director", "officer", "lead", "chief", "supervisor", "secretary",
+    "treasurer", "chair", "vice", "trustee", "trustees", "recording", "operations", "procurement",
+    "communications", "safety", "grants", "facilities", "scheduling", "customer", "service",
+    "labor", "relations", "net", "total", "amount", "certifying", "member", "answer", "final",
+    "yea", "nay", "yes", "no", "under", "per", "the", "that", "this", "its", "after", "before",
+    "post", "pre", "restated", "restatement", "authorization", "authorisation", "motion",
+    "change", "order", "orders", "rider", "option", "index", "asphalt", "signal", "interconnect",
+    "weekend", "overtime", "spare", "vehicle", "lighting", "delta", "fleet", "ceiling", "initial",
+    "step", "july", "august", "september", "october", "november", "december", "january",
+    "february", "march", "april", "may", "june", "llc", "co", "group", "electric", "glass",
+    "pavement", "civil", "sign", "signs", "explainer", "erratum", "correction", "legal", "name",
+    "current", "did", "pass", "passed", "carried", "mill", "district", "voter", "votes",
+}
+
+
+def _r4_name_spans(text: str, truth: dict[str, Any], persons_only: bool = True) -> list[tuple[int, int, str]]:
+    """Person-name mentions in text: value 'truth' for the certifying member (any variant or
+    a subset of their name tokens, e.g. a former surname), else the extra name itself.
+    persons_only=False also returns non-person capitalised phrases (programmes, roles) so
+    that "Ridgeline Skip-Stop (or possibly <truth>)" still reads as an alternative."""
+    truth_names_low = [_norm(v) for v in (truth.get("name_variants") or []) if v] or [_norm(truth["certifying_member"])]
+    truth_tokens = set()
+    for n in truth_names_low:
+        truth_tokens.update(n.split())
+    spans: list[tuple[int, int, str]] = []
+    for m in re.finditer(r"\b[A-Z][a-z]+(?:[-‐‑][A-Z][a-z]+)?(?:\s+[A-Z][a-z]+(?:[-‐‑][A-Z][a-z]+)?){1,2}\b", text):
+        cap = m.group()
+        words = cap.replace("‐", "-").replace("‑", "-").split()
+        if persons_only:
+            # strip leading role / heading words ("Treasurer Imani Howell")
+            while words and words[0].lower().rstrip("-") in _R4_NOT_PERSON:
+                words = words[1:]
+            while words and words[-1].lower().rstrip("-") in _R4_NOT_PERSON:
+                words = words[:-1]
+            if len(words) < 2:
+                continue
+        toks = set(_norm(" ".join(words)).split())
+        if persons_only and toks & {w.lower() for w in _R4_NOT_PERSON}:
+            continue
+        if toks <= truth_tokens or any(n in _norm(" ".join(words)) for n in truth_names_low):
+            spans.append((m.start(), m.end(), "truth"))
+        else:
+            spans.append((m.start(), m.end(), _norm(" ".join(words))))
+    return spans
+
+
+def _name_hedge(text: str, truth: dict[str, Any], segment: str) -> float:
+    """1.0 for the truth name present, 0.5 when the final segment offers an explicit
+    alternative between the truth name and another person, 0.0 for absent/wrong.
+
+    Round 4 (issue #95): other names in the working are not a hedge. The hedge test runs on
+    the final segment; if the segment names nobody it widens to the whole text.
+    """
+    if not _name_hit(text, truth):
+        return 0.0
+    spans = _r4_name_spans(segment, truth)
+    scope = segment
+    if not spans:
+        spans = _r4_name_spans(text, truth)
+        scope = text
+    if _r4_alt_between(scope, spans) and any(v != "truth" for _, _, v in spans):
+        return 0.5
+    # "<capitalised phrase> (or possibly <truth>)": an alternative offered against the truth
+    # name counts even when the other side is not a parseable person.
+    loose = _r4_name_spans(scope, truth, persons_only=False)
+    if _r4_alt_between(scope, loose, require_truth=True) and any(v != "truth" for _, _, v in loose):
+        return 0.5
+    return 1.0
+
+
+# Round 4: the outcome is read from the LAST sentence that carries a motion-outcome verb
+# (passed / carried / failed / rejected / approved / adopted ...), preferring the final
+# segment. "treated as never adopted" about a rider earlier in the working, or "eligible
+# affirmative voter", no longer decides the outcome. Sentences split on . or ! (not ?), so
+# "Did it pass? Yes" stays one sentence.
+_R4_OUTCOME_SELECT = re.compile(
+    r"\b(?:passed|pass|passes|carried|carry|carries|approved|approve|approves|adopted|adopt|adopts|"
+    r"failed|fails|reject|rejected|rejects|defeated|defeat|defeats|did not pass|didn'?t pass|"
+    r"did not carry|didn'?t carry)\b"
+)
+
+
+def _r4_outcome(text: str, segment: str, truth: dict[str, Any]) -> bool:
+    for scope in (segment, text):
+        sentences = [x for x in re.split(r"(?<=[.!])\s+|\n+", scope) if x.strip()]
+        picked = [x for x in sentences if _R4_OUTCOME_SELECT.search(_norm(x))]
+        if picked:
+            return _outcome_hit(picked[-1], truth)
+    return _outcome_hit(text, truth)
+
+
+# Round 4: an answer that stops mid-sentence (output cap, iteration cap) has no final
+# statement. The last line must end a sentence: a terminator or closing bracket/quote, an
+# amount-sized number, an outcome word, or a token of the certifying member's name.
+_R4_CLOSERS = ".!?:;)]}\"'”’*|%$"
+_R4_END_WORDS = {"yes", "no", "passed", "pass", "carried", "failed", "rejected", "approved", "adopted", "defeated"}
+
+
+def _r4_concluded(text: str, end_tokens: set[str], min_number: float) -> bool:
+    t = text.rstrip()
+    if not t:
+        return False
+    if t[-1] in _R4_CLOSERS:
+        return True
+    m = re.search(r"(-?\$?\d[\d,]*(?:\.\d+)?)\s*$", t)
+    if m:
+        try:
+            return abs(float(m.group(1).replace("$", "").replace(",", ""))) >= min_number
+        except ValueError:
+            return False
+    m = re.search(r"([A-Za-z][A-Za-z'’-]*)\s*$", t)
+    if m:
+        w = m.group(1).lower()
+        return w in _R4_END_WORDS or w in end_tokens
+    return False
+
+
 def score(answer_text: str, truth: Any) -> float:
     """Score the answer against the truth dict.
 
     - 1.0 only when all three components (net amount, certifying member,
-      outcome) are present, unambiguous, and not hedged with competing
-      candidates.
-    - 0.5 when the answer is hedged (multiple candidate amounts or names).
+      outcome) are present and the final statement does not hedge between
+      competing candidates. 0.0 when the answer stops mid-sentence (no final
+      statement).
+    - 0.4 when the final statement hedges (an explicit alternative between
+      amounts or names) but carries the truth.
     - 0.2 when at least one component is missing or wrong (partial credit).
     - 0.0 when nothing of substance is found, or the answer is gibberish.
+
+    Round 4 (issue #95): the text is formatting-normalised; the amount is read
+    from the final segment (else the whole text); extra amounts or names in
+    the working are not a hedge; the outcome is read from the final segment
+    when it carries an outcome word, else from the whole text.
     """
     if not isinstance(truth, dict) or not isinstance(answer_text, str):
         return 0.0
 
+    text = _r4_normalize(answer_text).replace("‐", "-").replace("‑", "-")
+    name_tokens: set[str] = set()
+    for v in (truth.get("name_variants") or []) + [truth.get("certifying_member") or ""]:
+        name_tokens.update(_norm(v).split())
+        name_tokens.update(w.lower() for w in v.split() if w)
+    if not _r4_concluded(text, name_tokens, 10_000):
+        return 0.0
+    segment = _r4_segment(text)
+
     truth_amount = truth.get("net_amount")
-    amount_observations = _extract_ints(answer_text)
+    amount_scope = segment if _r4_amount_spans(segment) or _extract_ints(segment) else text
+    amount_observations = _extract_ints(amount_scope)
     has_truth_amount = truth_amount in amount_observations
     if not has_truth_amount and truth_amount is not None:
-        has_truth_amount = _amount_in_million_form(answer_text, truth_amount)
-    # Hedging on amount: count distinct integer values present. If multiple
-    # nearby amounts and the truth is among them -> hedge (capped at 0.5).
-    if has_truth_amount and len(amount_observations) > 1:
-        distinct_candidates = sum(
-            1 for v in amount_observations if abs(v - truth_amount) > max(5, (truth_amount or 1) // 100)
-        )
-        amount_clear = distinct_candidates == 0
-        amount_hedged = distinct_candidates >= 1
-    else:
-        amount_clear = has_truth_amount
-        amount_hedged = False
+        has_truth_amount = _amount_in_million_form(amount_scope, truth_amount)
+    if not has_truth_amount and amount_scope is segment and truth_amount is not None:
+        # the segment has numbers (a date, a vote tally) but no amount: widen
+        if not _r4_amount_spans(segment):
+            amount_scope = text
+            amount_observations = _extract_ints(text)
+            has_truth_amount = truth_amount in amount_observations or _amount_in_million_form(text, truth_amount)
+    amount_hedged = False
+    if has_truth_amount and truth_amount is not None:
+        tol = max(5, truth_amount // 100)
+        spans = [(s, e, ("truth" if abs(v - truth_amount) <= tol else v)) for s, e, v in _r4_amount_spans(amount_scope)]
+        if any(v != "truth" for _, _, v in spans) and _r4_alt_between(amount_scope, spans):
+            amount_hedged = True
+    amount_clear = has_truth_amount and not amount_hedged
 
-    name_score = _name_hedge(answer_text, truth)
-    outcome_hit = _outcome_hit(answer_text, truth)
+    name_score = _name_hedge(text, truth, segment)
+    outcome_hit = _r4_outcome(text, segment, truth)
 
     # Aggregate boolean core components.
     amount_ok = bool(amount_clear)
@@ -1579,7 +1788,60 @@ if __name__ == "__main__":
         # wrong name with right amount
         wrong_name = "$" + str(amt) + "; Alex Smith; passed"
         assert score(wrong_name, truth) < 1.0
-        # shotgun amounts (two distinct numbers, both stated)
+        # shotgun amounts (two distinct numbers, both stated). Round 4: still a hedge, because
+        # "Candidates:" is an explicit non-commitment in the final statement.
         shotgun_amounts = "Candidates: $" + str(amt - 50000) + ", $" + str(amt) + ", $" + str(amt + 50000) + "; " + name + "; passed"
         assert score(shotgun_amounts, truth) < 1.0
-    print("GLaDOS: scorer regression battery PASS.")
+
+        # Round 4 (issue #95): the final statement is graded; shown working is not a hedge.
+        other = "Alex Smith"
+        r4_positives = {
+            "table_then_total_row": (
+                "| Item | Amount |\n|---|---|\n| Restated ceiling | $" + f"{amt - 60000:,}" + " |\n"
+                "| Signal-interconnect add | +$45,000 |\n| Overtime rider | +$15,000 |\n| **Net** | **$" + f"{amt:,}" + "** |\n\n"
+                "Certifying member: " + name + ". The restated authorization " + truth["outcome"] + "."
+            ),
+            "latex_sum": (
+                "$$\\$" + f"{amt - 60000:,}".replace(",", "{,}") + " + \\$45{,}000 + \\$15{,}000$$ **= $" + f"{amt:,}" + "**\n\n"
+                "Certifying member: **" + name + "**; it " + truth["outcome"] + "."
+            ),
+            "history_then_final": (
+                "The 2024-05-02 motion failed 4-5, the 2024-06-11 restatement was withdrawn or vacated, and the "
+                "2024-07-14 restatement carried 6-3; the Chair, " + other + ", does not certify.\n\n"
+                "Final answer: net authorized amount $" + f"{amt:,}" + "; certifying member " + name + "; " + truth["outcome"] + "."
+            ),
+            "boxed": "Net = " + f"{amt - 60000:,}" + " + 60,000.\n\n$\\boxed{\\$" + f"{amt:,}".replace(",", "{,}") + "}$ — certified by " + name + "; " + truth["outcome"] + ".",
+            "dates_and_tally_in_final": (
+                "Net authorized contract amount: $" + f"{amt:,}" + ". Certifying member (Bylaw III.7): " + name
+                + ". The last successful restated authorization (2024-09-13) " + truth["outcome"].upper() + " (carried 6-3)."
+            ),
+            "or_in_working_same_paragraph": (
+                "Post-restatement riders: +$45,000 (counts) and +$12,000 (withdrawn or vacated, so never adopted). "
+                "Net = $" + f"{amt:,}" + ". Under Bylaw III.7 (not the informal explainer naming " + other + "), the certifier is "
+                + name + ", and the restated authorization " + truth["outcome"] + "."
+            ),
+        }
+        for k, s_ in r4_positives.items():
+            sc = score(s_, truth)
+            assert sc == 1.0, f"GLaDOS round-4 positive {k!r} should score 1.0 (seed={seed}); got {sc}"
+        r4_negatives = {
+            "final_either_or_amount": (
+                "Working: ceiling $" + f"{amt - 60000:,}" + " plus riders.\n\n"
+                "Final answer: either $" + f"{amt:,}" + " or $" + f"{amt + 45000:,}" + "; " + name + "; " + truth["outcome"] + "."
+            ),
+            "final_name_or": (
+                "Final answer: $" + f"{amt:,}" + "; certifying member " + other + " or " + name + "; " + truth["outcome"] + "."
+            ),
+            "final_wrong_working_right": (
+                "The sum of the surviving riders gives $" + f"{amt:,}" + " and the Treasurer is " + name + ".\n\n"
+                "Final answer: $" + f"{amt + 45000:,}" + "; certifying member " + other + "; " + truth["outcome"] + "."
+            ),
+            "final_did_not_pass_working_passed": (
+                "The July restatement passed 6-3 with " + name + " certifying $" + f"{amt:,}" + ".\n\n"
+                "Final answer: $" + f"{amt:,}" + "; " + name + "; it did not pass."
+            ),
+        }
+        for k, s_ in r4_negatives.items():
+            sc = score(s_, truth)
+            assert sc < 1.0, f"GLaDOS round-4 negative {k!r} should score < 1.0 (seed={seed}); got {sc}"
+    print("GLaDOS: scorer regression battery PASS (round-4 final-statement cases included).")

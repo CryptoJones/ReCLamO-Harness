@@ -311,6 +311,68 @@ def generate(seed: int, size: str) -> dict:
     return {"context": context, "question": question,
             "answer": truth, "meta": meta}
 
+# Round 4 (2026-10-19, issue #95): final-statement scoring; see evals/TEST-PLAN.md section 1d.
+# --- round-4 shared helpers (pasted verbatim into every round-4 scorer; keep in sync) ---
+# Round 4 (2026-10-19, issue #95): a scorer reads the answer's FINAL STATEMENT, not its working.
+# Formatting is normalised first (LaTeX money, \boxed{}, markdown emphasis, tables), then the
+# final segment is located, and "hedge" means an explicit alternative offered inside that
+# segment ("X or Y", "either X or Y", "possibly X"), never the mere presence of other numbers
+# or names earlier in a shown calculation. Both arms are scored by the same code.
+import re as _re4
+
+_R4_MARKER = _re4.compile(
+    r"(?im)^[\s#>*_|\-]*(?:final\s+answer|final\s+result|final\s+total|answer|conclusion|"
+    r"result|in\s+summary|summary|therefore|so,?\s+the|thus,?\s+the|hence|total)\b"
+)
+_R4_ALT = _re4.compile(
+    r"\b(?:either|alternatively|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain)\b|"
+    r"\b(?:or)\b",
+    _re4.IGNORECASE,
+)
+
+
+def _r4_normalize(text: str) -> str:
+    """Flatten LaTeX / markdown money and emphasis so one regex sees one surface form."""
+    t = text.replace("\u2212", "-").replace("\u00a0", " ")
+    t = t.replace("{,}", ",").replace("\\$", "$").replace("\\,", "").replace("\\!", "")
+    for _ in range(3):  # nested \boxed{\text{...}} etc.
+        t = _re4.sub(r"\\(?:boxed|text|textbf|mathrm|mathbf|underline)\{([^{}]*)\}", r"\1", t)
+    t = t.replace("$$", " ")
+    t = _re4.sub(r"\\\(|\\\)|\\\[|\\\]", " ", t)
+    t = _re4.sub(r"(\*\*|__)(.+?)\1", r"\2", t, flags=_re4.DOTALL)
+    t = _re4.sub(r"`+", "", t)
+    t = _re4.sub(r"^\s*\|?[\s:\-|]+\|?\s*$", "", t, flags=_re4.MULTILINE)  # table rules
+    t = t.replace("|", " ")
+    return t
+
+
+def _r4_segment(text: str) -> str:
+    """The final statement: from the last answer marker to the end, else the last paragraph.
+
+    A marker is a line that opens with "final answer", "answer", "conclusion", "total",
+    "therefore" and the like. If no marker exists the last non-empty paragraph is used.
+    Callers widen to the whole text when the segment holds no candidate of the kind they
+    need (for example a name when the total line carries only the amount).
+    """
+    t = text.rstrip()
+    if not t:
+        return ""
+    last = None
+    for m in _R4_MARKER.finditer(t):
+        last = m
+    if last is not None:
+        return t[last.start():]
+    paras = [p for p in _re4.split(r"\n\s*\n", t) if p.strip()]
+    return paras[-1] if paras else t
+
+
+def _r4_explicit_alternative(segment: str) -> bool:
+    """True when the final statement itself offers alternatives or declares uncertainty."""
+    return bool(_R4_ALT.search(segment))
+# --- end round-4 shared helpers ---
+
+
 _NUM = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
 _NEG_BEFORE = re.compile(
     r"\b(?:not|never|wrong(?:ly)?|incorrect(?:ly)?|no(?!\s+\w*qualif)|"
@@ -372,19 +434,71 @@ def _zero_word_value(text: str):
     return None
 
 
+# Round 4: an explicit alternative between two figures in the final segment -- an
+# uncertainty word within 80 chars of a figure, or "or"/"alternatively" with a figure within
+# 40 chars on each side and no sentence punctuation between. "(3 claims)" after a total or
+# "a + b = T" is not an alternative.
+_R4_UNCERTAIN = re.compile(
+    r"\b(?:either|possibly|probably|maybe|perhaps|could\s+be|might\s+be|"
+    r"can(?:no|')t\s+(?:be\s+)?determine[d]?|unclear|ambiguous|uncertain|candidates?|one\s+of)\b",
+    re.IGNORECASE,
+)
+_R4_OR = re.compile(r"\b(?:or|alternatively)\b", re.IGNORECASE)
+# "a + b = T" / "a - b = T": the authoritative figure is the result after "=".
+_R4_CHAIN_STEP = re.compile(r"^\s*[+\-*/\u2212\u00d7]\s*\$?(-?\d[\d,]*(?:\.\d+)?)")
+_R4_CHAIN_EQ = re.compile(r"^\s*=\s*\$?(-?\d[\d,]*(?:\.\d+)?)")
+
+
+def _r4_alt_between(segment: str, spans) -> bool:
+    if len({v for v, _, _ in spans}) < 2:
+        return False
+    for m in _R4_UNCERTAIN.finditer(segment):
+        if any(abs(m.start() - e) <= 80 or abs(s - m.end()) <= 80 for _, s, e in spans):
+            return True
+    for m in _R4_OR.finditer(segment):
+        before = {v for v, s, e in spans if 0 <= m.start() - e <= 40 and not re.search(r"[.;:!?]", segment[e:m.start()])}
+        after = {v for v, s, e in spans if 0 <= s - m.end() <= 40 and not re.search(r"[.;:!?]", segment[m.end():s])}
+        if before and after and len(before | after) >= 2:
+            return True
+    return False
+
+
+def _r4_follow_chain(text: str, value, end: int):
+    """From a figure that opens "a + b = T", return (T, end_of_T); else (value, end)."""
+    pos = end
+    while True:
+        m = _R4_CHAIN_STEP.match(text[pos:pos + 40])
+        if not m:
+            break
+        pos += m.end()
+    m = _R4_CHAIN_EQ.match(text[pos:pos + 40])
+    if m:
+        v = _parse(m.group(1))
+        if v is not None:
+            return v, pos + m.end()
+    return value, end
+
+
 def score(answer_text: str, truth) -> float:
     """Robust to prose/formatting; STRICT about the substance.
 
-    Authoritative-figure selection (in order):
+    Authoritative-figure selection, inside the FINAL SEGMENT of the
+    formatting-normalised answer (the whole text when the segment holds no
+    figure), in order:
     1. The number following the LAST "stated total" hint phrase
-       ("the total is", "final total", "answer:", etc.).
+       ("the total is", "final total", "answer:", "$", etc.); when that
+       number opens an arithmetic chain "a + b = T", T is the figure.
     2. Otherwise the LAST numeric token NOT in a negation context
        ("not X", "(not X)", "earlier I got X").
 
     Full credit (1.0) only if the authoritative figure equals the truth
-    (within a cent). 0.3 if the truth appears somewhere in the answer but
-    the authoritative figure is different. 0.0 otherwise. "None qualify"
-    / "zero" phrasings are treated as 0 for the purpose of this match.
+    (within a cent) and the final segment is not an explicit alternative
+    between two figures. 0.3 if the truth appears somewhere in the answer but
+    the authoritative figure is different (or the final segment hedges).
+    0.0 otherwise. "None qualify" / "zero" phrasings are treated as 0.
+
+    Round 4 (issue #95): working shown before the final statement -- line
+    items, intermediate sums, a history of figures -- is not penalised.
     """
     try:
         t = float(truth)
@@ -392,14 +506,21 @@ def score(answer_text: str, truth) -> float:
         return 0.0
     if not answer_text or not str(answer_text).strip():
         return 0.0
-    text = str(answer_text)
+    full = _r4_normalize(str(answer_text))
+    if not full.strip():
+        return 0.0
+    segment = _r4_segment(full)
+    seg_numbers = list(_number_values(segment))
+    if seg_numbers or _zero_word_value(segment) is not None:
+        text = segment
+    else:
+        text = full
+    all_numbers = list(_number_values(full))
 
     # Find the position of the last "stated total" hint, if any.
     last_hint_end = -1
     for m in _TOTAL_HINT.finditer(text):
         last_hint_end = max(last_hint_end, m.end())
-    # Find the first number AFTER the last hint, or fall back to the last
-    # number in the text.
     numbers = list(_number_values(text))
     if not numbers:
         # Check for zero-word only.
@@ -417,6 +538,8 @@ def score(answer_text: str, truth) -> float:
             auth_value, auth_start, auth_end = numbers[-1]
     else:
         auth_value, auth_start, auth_end = numbers[-1]
+    # "$699 + $1,132 = 1831": the hint picked an operand; follow the chain to T.
+    auth_value, auth_end = _r4_follow_chain(text, auth_value, auth_end)
     # Drop a number if it is preceded by a negation phrase within ~20 chars.
     pre = text[max(0, auth_start - 20):auth_start]
     if _NEG_BEFORE.search(pre):
@@ -434,6 +557,9 @@ def score(answer_text: str, truth) -> float:
             zw = _zero_word_value(text)
             auth_value = 0 if zw is not None else numbers[-1][0]
 
+    truth_present = any(abs(v - t) < 0.005 for v, _, _ in all_numbers)
+    if _r4_alt_between(segment, seg_numbers):
+        return 0.3 if truth_present else 0.0
     if abs(auth_value - t) < 0.005:
         return 1.0
     # "None qualify" / "zero" patterns map to 0 — if the truth is 0 and the
@@ -442,7 +568,7 @@ def score(answer_text: str, truth) -> float:
         if abs(auth_value - 0) < 0.005 or _zero_word_value(text) is not None:
             return 1.0
     # Correct figure present somewhere in the answer?
-    if any(abs(v - t) < 0.005 for v, _, _ in numbers):
+    if truth_present:
         return 0.3
     return 0.0
 
@@ -467,4 +593,41 @@ if __name__ == "__main__":
     for wrong in (t + 1, t * 2 + 7, t + 913, t + 123_456):
         assert score(str(wrong), t) < 1.0
     assert score("I could not find any qualifying reports.", t) == 0.0
-    print("self-checks passed")
+
+    # Round 4 (issue #95): the final statement is graded; shown working is not a hedge.
+    a, b = t - 1132 if t > 1132 else t + 500, 1132
+    r4_positives = {
+        # markdown table of line items ending in a total row
+        "table_total_row": (
+            f"| Claim | Amount |\n|---|---|\n| Riga trip | ${a:,} |\n| Oslo trip | ${b:,} |\n| Perth trip (rejected) | $1,896 |\n"
+            f"| **Total** | **${t:,}** |"
+        ),
+        # LaTeX sum, bold result
+        "latex_sum_bold_total": f"**Total:** $$\\${a:,}".replace(",", "{,}") + " + \\$1{,}132$$ **= $" + f"{t:,}" + "**",
+        # the brief's form: "$a + $b = **T**" where "$" is a total hint before an operand
+        "dollar_sum_bold": f"**Total:** ${a:,} + ${b:,} = **{t}**",
+        # history paragraph then the final answer
+        "history_then_final": (
+            f"The Oslo claim was first rejected at $1,100, then approved at ${b:,} after the manager's note; "
+            f"the Riga claim was amended from $2,000 to ${a:,}.\n\nFinal answer: {t}"
+        ),
+        # boxed answer
+        "boxed": f"Qualifying: {a} + {b}.\n\n$$\\boxed{{{t}}}$$",
+        # bare bold number as the last paragraph after working with other dollar amounts
+        "bare_bold_last_paragraph": (
+            f"1. Bogota trip: Approved at ${t:,}.00 (Operations)\n2. Marseille trip: not approved (correction to $1,502 noted)\n\n"
+            f"Only the Bogota trip qualifies.\n\n**{t}**"
+        ),
+    }
+    for k, s_ in r4_positives.items():
+        sc = score(s_, t)
+        assert sc == 1.0, f"Cerebex round-4 positive {k!r} should score 1.0; got {sc}"
+    r4_negatives = {
+        "final_either_or": f"Working: {a} + {b}.\n\nFinal answer: either {t} or {t + 250}.",
+        "final_wrong_working_right": f"The qualifying claims sum to {t}.\n\nFinal answer: {t + 250}",
+        "total_row_wrong": f"| Claim | Amount |\n|---|---|\n| Riga trip | ${t:,} |\n| **Total** | **${t + 100:,}** |",
+    }
+    for k, s_ in r4_negatives.items():
+        sc = score(s_, t)
+        assert sc < 1.0, f"Cerebex round-4 negative {k!r} should score < 1.0; got {sc}"
+    print("self-checks passed (round-4 final-statement cases included)")
