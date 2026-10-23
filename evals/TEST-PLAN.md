@@ -336,6 +336,25 @@ stack; the A-vs-A agreement is the engine noise floor any other build is judged 
 two engines are never pooled. Baselines (#83, #84) and #69 wait until the round-4 scorers are
 approved.
 
+**1d-i. Addendum, 2026-10-23 (CJ; epic #80 decision 15).** Section 1d approved by CJ and merged
+(PR #99). Two changes, appended rather than rewritten above:
+
+- **The #90 human check is a human-validated LLM judge**, replacing "CJ marks every confirmatory
+  pair". Fable graded all 432 pairs (864 answers) blind: answer key and answer only, opaque ids,
+  no arm and no score. CJ then marks a short blinded sheet: 40 pairs sampled at least one per task
+  and size (partial-score and arm-disagreement pairs first), plus up to 3 pairs per task/arm cell
+  where Fable and the round-3 grader disagree (22 pairs; 62 in all). Reported: round-3 grader vs
+  Fable on all 864 answers, round-4 grader vs Fable, and CJ vs Fable and CJ vs each grader on his
+  sample, per task and arm. Fable helped build the pipeline, so its grades are not human
+  verification without CJ's sample. First judge pass (diagnostic): round-3 grader and Fable agree
+  on 627/765 decided answers (82.0%); all 138 disagreements are Fable-correct / grader-not-exact
+  (plain 102, harness 36). Detail on #90.
+- **When `active` switches.** Validation (e) above now reads "agree with CJ's #90 sample and with
+  the Fable judge at least as well as round 3 does on every task". `manifest.json`'s `active` set
+  stays round 3 until (a)–(e) are met; merging this section approves the rule and the candidates,
+  not the switch. Rescoring into `runs/exp-v02/rescored-round4/` proceeds now, and the recomputed
+  H1 is labelled post hoc as above.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
