@@ -16,8 +16,8 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [ ] REPL-only ablation arm ([#83](https://github.com/CryptoJones/ReCLamO-Harness/issues/83))
 - [ ] Fixed-chunk map-reduce baseline arm ([#84](https://github.com/CryptoJones/ReCLamO-Harness/issues/84))
 - [ ] Strata 400 fix ([#72](https://github.com/CryptoJones/ReCLamO-Harness/issues/72)) — also listed under harness bugs
-- [ ] Human verification: CJ hand-checks answer keys and blind-grades a sample — **not before 2026-10-18** ([#90](https://github.com/CryptoJones/ReCLamO-Harness/issues/90))
-- [ ] **Scorer verbosity bias**: round-3 hedge rules zero out correct plain answers (MasterControl 54/54, Neuromancer 22/41, SELMA 7/10); H1 does not survive symmetric rescoring — #90 first, dated amendment, rescore into new files, baselines wait ([#95](https://github.com/CryptoJones/ReCLamO-Harness/issues/95))
+- [ ] Human verification ([#90](https://github.com/CryptoJones/ReCLamO-Harness/issues/90)) — decision 15 (2026-10-23): Fable judged all 432 pairs blind (agrees with the round-3 grader on 82.0%; all 138 disagreements are grader-too-strict); CJ grades a 62-pair blinded sample
+- [ ] **Scorer verbosity bias**: round-3 hedge rules zero out correct plain answers (MasterControl 54/54, Neuromancer 22/41, SELMA 7/10); H1 does not survive symmetric rescoring — #90 first, dated amendment, rescore into new files, baselines wait ([#95](https://github.com/CryptoJones/ReCLamO-Harness/issues/95)) — round-4 scorers + TEST-PLAN 1d merged in PR [#99](https://github.com/CryptoJones/ReCLamO-Harness/pull/99); rescored H1: small stop does not hold, medium holds at seed 30; `active` switches after validation (e)
 - [ ] Replay set: temperature-0 capture on the current Strata stack, two passes — the engine noise floor before any engine change; pluto's next job (CJ 2026-10-19, option 1A) ([#97](https://github.com/CryptoJones/ReCLamO-Harness/issues/97))
 - [ ] Paper: reframe as a transfer study; confirmatory seeds 4–43; arXiv-only ([#88](https://github.com/CryptoJones/ReCLamO-Harness/issues/88))
 
