@@ -9,7 +9,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 
 - [x] TEST-PLAN amendment: confirmatory seeds 4–43, H1 to 320, H6/H7 baselines, clustered analysis ([#81](https://github.com/CryptoJones/ReCLamO-Harness/issues/81)) — PR [#89](https://github.com/CryptoJones/ReCLamO-Harness/pull/89); also corrected the H1 boundaries to true O'Brien–Fleming
 - [x] Analysis: clustered stats, per-task/author/position, cost/latency, failure taxonomy ([#85](https://github.com/CryptoJones/ReCLamO-Harness/issues/85)) — `paper/analysis/h1_analysis.py`, fixture-tested in CI; runs on confirmatory rows only at the seed-43 look (decision 17)
-- [ ] Construct validity: non-LLM shortcut solver per generator ([#86](https://github.com/CryptoJones/ReCLamO-Harness/issues/86))
+- [x] Construct validity: non-LLM shortcut solver per generator ([#86](https://github.com/CryptoJones/ReCLamO-Harness/issues/86)) — `evals/independent/shortcut_solver.py`; Multivac, MasterControl and SELMA fall to a regex (flagged as search), the other five do not
 - [ ] Provenance record for the system under test ([#87](https://github.com/CryptoJones/ReCLamO-Harness/issues/87))
 - [ ] Extend H1 to 320 pairs: seeds 10–43, harness v0.1 32K + plain-128K ([#82](https://github.com/CryptoJones/ReCLamO-Harness/issues/82)) — small relaunched 2026-10-23 for seeds 31–43 under round 4 (decision 16); medium stopped at seed 30
 - [ ] Repeat the full main grid with qwen4exp's own sampling ([#69](https://github.com/CryptoJones/ReCLamO-Harness/issues/69)) — also listed under Evaluation
