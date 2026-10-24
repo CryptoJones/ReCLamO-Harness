@@ -389,6 +389,31 @@ run and met, `active` is switched to round 4, and H1-small resumes.
   (4 of 12 sampled answers; 17 of 108 overall). It is reported with and without Multivac at the
   final look. No further scorer change is made mid-run.
 
+**1d-iii. Addendum, 2026-10-23 (CJ "Fix and regrade", 21:55 CDT; epic #80 decision 18; issue
+#105).** A key defect in one generator, found from CJ's note on the #90 sheet (Cerebex medium
+seed 5: both arms answered 7,894; the key said 6,340).
+
+- **The defect.** Cerebex's status-flip amendment flipped the key and then drew its wording
+  ("approve it after all" / "rescinding the approval") at random, independent of the flip, so
+  about half of those amendments said the opposite of the key. The question tells the reader
+  that the correction governs, so the text-faithful answer differed from the key. An audit that
+  re-reads every thread found 10 of 84 small/medium keys contradicted (9 confirmatory); the
+  generator fix below finds 13 of 98 including large (small 30, 40; medium 4, 5, 6, 7, 13, 17,
+  26, 36, 43; large 5, 9), the extra three being cells the audit parser mis-read.
+- **The fix (round 5, Cerebex only).** The wording is drawn first and the status follows it. The
+  RNG order is unchanged, so every context and question is byte-identical to round 4 on every
+  cell; only the keys on those 13 cells move, to the value the text supports. `active` for
+  Cerebex is round 5; the other seven lanes stay on round 4. This is a key correction, not a
+  scorer change, so it does not reopen the round-4 freeze of 1d-ii.
+- **Regrade, no re-run.** The recorded rows are regraded against the corrected keys into
+  `runs/exp-v02/rescored-round4/` (`rescore_round4.py --set active`); rows whose key moved carry
+  `truth_changed`. What each arm saw is unchanged, so no row is re-run. On the 8 affected cells
+  with recorded rows before this addendum the harness gained 5 exact and plain 7; neither lost.
+  The H1-small run in progress picks the corrected keys up for its remaining seeds (small 40 is
+  one) without any change to its inputs.
+- **Reporting.** The paper reports Cerebex under the corrected keys and notes the defect; the
+  pre-fix numbers remain in the recorded files and in the 1d-ii validation tables.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:

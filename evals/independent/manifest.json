@@ -245,18 +245,33 @@
           "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
           "notes": "fixed/round3/minimax/TASK.md, TASK3.md",
           "result": "pass (check.py, self-test, 0 scorer-battery flags)"
+        },
+        {
+          "round": "5",
+          "defect": "key defect (issue #105): the status-flip amendment flipped the key and then drew its wording at random, so about half of those amendments said the opposite of the key; 13 of 98 keys (seeds 0-43 small/medium, 0-9 large) contradicted the text",
+          "found_by": "CJ's note on the #90 hand-check sheet (Cerebex medium seed 5), audited 2026-10-23",
+          "by": "Claude Code (Fable 5.1), generator-only edit: the wording is drawn first and the status follows it; RNG order unchanged",
+          "file": "fixed/round5/Cerebex.py",
+          "sha256": "8be6d2ec0a94caf95d0ab1854e0f7e053238dd663e3527c8062252af2f938df8",
+          "result": "pass (self-test, check.py, scorer battery 0 flags); generate() context and question byte-identical to round 4 on every cell; keys change on 13 cells, each a contradicted amendment"
         }
       ],
       "active": {
         "file": "fixed/active/Cerebex.py",
-        "sha256": "1afefa5dba2fef38e1ea4ec15f79123b742a47711453a0b235f5d999ff984d45",
-        "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
-        "switched": "2026-10-23",
+        "sha256": "8be6d2ec0a94caf95d0ab1854e0f7e053238dd663e3527c8062252af2f938df8",
+        "source": "round-5 key fix (issue #105; TEST-PLAN 1d-iii) on top of round-4 final-statement scoring; active since 2026-10-23",
+        "switched": "2026-10-23 (round 5; the round-4 switch was earlier the same day)",
         "previous": {
-          "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
-          "source": "round-3 minimax fix",
+          "file": "fixed/round4/Cerebex.py",
+          "sha256": "1afefa5dba2fef38e1ea4ec15f79123b742a47711453a0b235f5d999ff984d45",
+          "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d; PR #99); active since 2026-10-23",
           "retired": "2026-10-23",
-          "file": "fixed/round3/minimax/Cerebex.py"
+          "previous": {
+            "sha256": "1e3d95e5e4786f694c08f1bf73261b97aee39549c8fcb71d29a14b35d5e5fb66",
+            "source": "round-3 minimax fix",
+            "retired": "2026-10-23",
+            "file": "fixed/round3/minimax/Cerebex.py"
+          }
         }
       },
       "round4": {
@@ -265,6 +280,14 @@
         "source": "round-4 final-statement scoring (issue #95, TEST-PLAN 1d); ACTIVE since 2026-10-23 (validation (e) met: CJ sample and Fable judge, #90)",
         "created": "2026-10-19",
         "generate_byte_identical_to_active": true
+      },
+      "round5": {
+        "file": "fixed/round5/Cerebex.py",
+        "sha256": "8be6d2ec0a94caf95d0ab1854e0f7e053238dd663e3527c8062252af2f938df8",
+        "source": "round-5 key fix (issue #105); ACTIVE since 2026-10-23",
+        "created": "2026-10-23",
+        "generate_byte_identical_to_round4": true,
+        "keys_changed": 13
       }
     },
     "Neuromancer": {
@@ -618,5 +641,6 @@
   "round2_note": "Round 2 (2026-10-07): answerability/scorer defects found by the #22 evaluation were fixed. Each fix was verified with fixed/round2/verify_defects.py over seeds 0-9 at every size, plus check.py. The #22 results were measured on the pre-round-2 tasks and are not re-run.",
   "round3_note": "Round 3 (2026-10-08): fixes for the independent audit (audit/REPORT.md): Cerebex hidden-division key, SELMA date/order contradiction, TheDixieFlatline missing CORRECTION email, MasterControl/Neuromancer wording, and scorer fairness in all 8. Verified: check.py, each self-test, audit/scripts/scorer_battery.py (1,701 probes, 0 flags), the SELMA and Dixie text solvers, and byte-identical generation for the scorer-only tasks (GLaDOS, SHODAN, Multivac). Earlier #22 runs used the pre-round-3 set.",
   "round3_1_note": "Round 3.1 (2026-10-08, issue #63): scorer-only fix to Multivac score(). Contexts, questions and answer keys are unchanged (byte-identical generate() output for every size x seeds 0-9). Probes for the 'ID: value' shapes were added to audit/scripts/scorer_battery.py for all 8 tasks (0 flags); no other scorer changed. Rows scored before this can be re-scored with run_eval.py --rescore FILE.",
-  "round4_note": "Round 4 (2026-10-19, issue #95; PR #99): scorer-only final-statement scoring, generate() byte-identical. Switched to active 2026-10-23 (CJ, epic #80 decision 16) after validation (a)-(e): on CJ's 40-pair #90 sample round 4 agrees with CJ on 71/77 answers vs 59/77 for round 3 and is >= round 3 on every task; against the Fable judge on all 765 decided answers round 4 agrees on 738 vs 627 and is >= round 3 on every task. Rows scored before the switch carry active_source 'round-3 ...'; runs/exp-v02/rescored-round4/ is the round-4 view of them."
+  "round4_note": "Round 4 (2026-10-19, issue #95; PR #99): scorer-only final-statement scoring, generate() byte-identical. Switched to active 2026-10-23 (CJ, epic #80 decision 16) after validation (a)-(e): on CJ's 40-pair #90 sample round 4 agrees with CJ on 71/77 answers vs 59/77 for round 3 and is >= round 3 on every task; against the Fable judge on all 765 decided answers round 4 agrees on 738 vs 627 and is >= round 3 on every task. Rows scored before the switch carry active_source 'round-3 ...'; runs/exp-v02/rescored-round4/ is the round-4 view of them.",
+  "round5_note": "Round 5 (2026-10-23, issue #105; CJ decision 18 on epic #80): Cerebex only. The status-flip amendment now draws its wording first and sets the status from it, so the key agrees with the text. Contexts and questions are byte-identical to round 4 for every seed and size; keys change on 13 cells (small 30, 40; medium 4, 5, 6, 7, 13, 17, 26, 36, 43; large 5, 9). Recorded Cerebex rows are regraded against the corrected keys into runs/exp-v02/rescored-round4/ (rows carry truth_changed); nothing is re-run."
 }

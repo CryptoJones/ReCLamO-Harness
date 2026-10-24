@@ -238,6 +238,20 @@ are reported with that label and the headline is also given without them. The au
 the seed-4 and seed-5 keys while sampling document formats; seeds 10-43 are the held-out
 check. Tests: `tests/test_shortcut_solver.py`.
 
+## Round 5 (Cerebex key fix, 2026-10-23; ACTIVE for Cerebex)
+
+Issue #105, epic #80 decision 18. The status-flip amendment in Cerebex flipped the key and then
+drew its wording at random, so about half of those amendments said the opposite of the key.
+`fixed/round5/Cerebex.py` draws the wording first and sets the status from it. The RNG order is
+unchanged: every context and question is byte-identical to round 4; keys change on 13 cells
+(small 30, 40; medium 4, 5, 6, 7, 13, 17, 26, 36, 43; large 5, 9). `fixed/active/Cerebex.py` is
+this file; the other seven lanes stay on round 4. Recorded rows are regraded, not re-run:
+
+    uv run python evals/independent/rescore_round4.py runs/exp-v02/plain-131k.json --out runs/exp-v02/rescored-round4/plain-131k.json
+    uv run python evals/independent/rescore_round4.py runs/exp-v02/h-v01-32k.json --out runs/exp-v02/rescored-round4/h-v01-32k.json
+
+(`--set active` is the default; `--set round4` reproduces the 2026-10-19 candidate grading.)
+
 ## Round 4 (scorer-only, 2026-10-19; **ACTIVE since 2026-10-23**)
 
 Issue #95. The round-3 scorers penalise an answer for *showing its work*: several dollar

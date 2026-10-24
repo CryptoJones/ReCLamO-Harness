@@ -226,12 +226,18 @@ def generate(seed: int, size: str) -> dict:
                         "disregard my earlier email.")
                 r["amt"] = new
             elif kind == 1:    # status flip
-                r["approved"] = not r["approved"]
+                # Round 5 (issue #105): the wording is drawn first and the status
+                # follows it. Rounds 1-4 flipped the status and then drew the
+                # wording independently, so about half of these amendments said
+                # the opposite of the key. The RNG order is unchanged, so every
+                # context is byte-identical to round 4; only the key moves, and
+                # only where the text and the key disagreed.
                 body = rng.choice([
                     f"Scratch that — after reviewing {ref}, we have decided to "
                     "approve it after all at the amount originally submitted.",
                     f"Update on {ref}: we are rescinding the approval; it does "
                     "not qualify, despite what I wrote previously."])
+                r["approved"] = body.startswith("Scratch that")
             else:              # both
                 new = MONEY(rng)
                 r["amt"] = new; r["approved"] = rng.random() < 0.5
