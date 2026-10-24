@@ -416,7 +416,10 @@ It is served by the Strata inference server on \code{pluto},
 a workstation with an NVIDIA V100 (32\,GB), a P100 (16\,GB) and an RTX 3060
 (12\,GB, on an external PCIe dock). Since 2026-10-08 Strata runs with an int8 KV
 cache, a 65,536-token resident cache and two parallel slots; it accepts prompts
-beyond the resident cache at reduced prefill speed. The same model serves as
+beyond the resident cache at reduced prefill speed. The weight files (sha256 and the
+Hugging Face revision), the draft head, the tokenizer and chat-template hashes, the
+engine commit with its one local patch, the build flags, the full server command line
+and the hardware are recorded in \code{paper/provenance.md}. The same model serves as
 planner and reader. Root turns use thinking; sub-calls do not. Sampling follows the
 Qwen3 model-card presets (root: temperature 0.6, top-$p$ 0.95, top-$k$ 20, min-$p$ 0;
 sub-calls: 0.7, 0.8, 20, presence penalty 1.0), not the defaults embedded in the GGUF
