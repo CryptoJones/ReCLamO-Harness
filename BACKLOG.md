@@ -14,6 +14,7 @@ Every line here has a matching issue and vice versa; tick the box when the issue
 - [x] **Cerebex key defect**: status-flip amendment wording chosen independently of the flip, so 13 of 98 keys contradicted the text ([#105](https://github.com/CryptoJones/ReCLamO-Harness/issues/105)) — decision 18 "fix and regrade": round-5 Cerebex (contexts byte-identical, keys corrected), active switched, recorded rows regraded (TEST-PLAN 1d-iii)
 - [ ] Extend H1 to 320 pairs: seeds 10–43, harness v0.1 32K + plain-128K ([#82](https://github.com/CryptoJones/ReCLamO-Harness/issues/82)) — small finished seed 43 on 2026-10-24: final look crosses for plain (z = −3.108, all from SHODAN turn-cap failures; TEST-PLAN 1e); medium's seed-30 stop no longer holds under the round-5 Cerebex keys (z = +2.121 < 2.454), seeds 31–43 await CJ
 - [ ] Repeat the full main grid with qwen4exp's own sampling ([#69](https://github.com/CryptoJones/ReCLamO-Harness/issues/69)) — also listed under Evaluation
+- [ ] Harness v0.1 fails SHODAN at small: 39 of 40 runs hit the 20-turn cap without answering; decides H1-small (z −3.108 with it, +0.649 without) ([#108](https://github.com/CryptoJones/ReCLamO-Harness/issues/108))
 - [ ] REPL-only ablation arm ([#83](https://github.com/CryptoJones/ReCLamO-Harness/issues/83))
 - [ ] Fixed-chunk map-reduce baseline arm ([#84](https://github.com/CryptoJones/ReCLamO-Harness/issues/84))
 - [ ] Strata 400 fix ([#72](https://github.com/CryptoJones/ReCLamO-Harness/issues/72)) — also listed under harness bugs
