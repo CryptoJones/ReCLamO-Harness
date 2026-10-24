@@ -207,6 +207,37 @@ To re-score rows produced before this round:
 `uv run python evals/independent/run_eval.py --rescore FILE [--out NEW]`. It writes
 `FILE.rescored.json` plus a summary, and records `old_score` / `new_score` on every row.
 
+## Construct-validity check: non-LLM shortcut solvers (issue #86)
+
+`shortcut_solver.py` answers every task with two deterministic, model-free rules built from
+the question and the document only: `last` (the last-mentioned candidate of the answer's
+type) and `heuristic` (a regex shortcut on the question's key terms: follow the asset's
+renames, take the assignment mail for the named review, the audit-summary line carrying both
+flags, the sum of approved amounts for the named month and category, ...). Both are graded
+by the task's own pinned `score()`. A task where a shortcut is exact on at least half the
+cells measures search as much as reasoning, and the paper says so.
+
+    uv run python evals/independent/shortcut_solver.py --seeds 4-9 --sizes small,medium
+    uv run python evals/independent/shortcut_solver.py --seeds 10-43 --out runs/shortcut-10-43.md
+
+Result (2026-10-23, round-4 active scorers), exact cells for `heuristic` / `last`:
+
+| task | seeds 4-9 small | seeds 4-9 medium | seeds 10-43 small | seeds 10-43 medium | verdict |
+|---|---|---|---|---|---|
+| Multivac | 6/6 / 6/6 | 6/6 / 6/6 | 34/34 / 34/34 | 34/34 / 34/34 | **search**: initial description + last status line |
+| MasterControl | 6/6 / 1/6 | 6/6 / 0/6 | 34/34 / 4/34 | 34/34 / 7/34 | **search**: the summary line with both flags + the plain log sum |
+| SELMA | 5/6 / 0/6 | 5/6 / 0/6 | 31/34 / 1/34 | 34/34 / 1/34 | **search**: the last assignment mail about the named review |
+| Cerebex | 1/6 / 0/6 | 0/6 / 0/6 | 8/34 / 2/34 | 2/34 / 0/34 | reasoning |
+| Neuromancer | 0/6 / 0/6 | 0/6 / 0/6 | 4/34 / 0/34 | 0/34 / 0/34 | reasoning |
+| SHODAN | 0/6 / 0/6 | 0/6 / 0/6 | 3/34 / 3/34 | 0/34 / 0/34 | reasoning |
+| GLaDOS | 0/6 / 0/6 | 0/6 / 0/6 | 0/34 / 0/34 | 0/34 / 0/34 | reasoning |
+| TheDixieFlatline | 0/6 / 0/6 | 0/6 / 0/6 | 0/34 / 0/34 | 0/34 / 0/34 | reasoning |
+
+Three of the eight tasks (Multivac, MasterControl, SELMA) fall to a regex; their H1 cells
+are reported with that label and the headline is also given without them. The author saw
+the seed-4 and seed-5 keys while sampling document formats; seeds 10-43 are the held-out
+check. Tests: `tests/test_shortcut_solver.py`.
+
 ## Round 4 (scorer-only, 2026-10-19; **ACTIVE since 2026-10-23**)
 
 Issue #95. The round-3 scorers penalise an answer for *showing its work*: several dollar
