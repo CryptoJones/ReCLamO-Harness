@@ -457,7 +457,7 @@ analyses on the same 320 pairs:
 move seven medium seed-4–30 cells (4, 5, 6, 7, 13, 17, 26), medium crosses at neither look (+2.138 at seed 17, +2.121 at
 seed 30). Medium therefore has no confirmatory result yet. Its seed-30 rows stand as a
 look-2 result inside the boundary. Running medium seeds 31–43 to the third look, as 1d-ii did
-for small, is CJ's decision and is not started by this entry. Until then medium is reported as
+for small, is CJ's decision and is not started by this entry (decided in 1e-i below). Until then medium is reported as
 not concluded, with its seed-30 estimate (bootstrap exact-rate difference +0.056, 95% CI
 [−0.037, 0.162]).
 
@@ -466,6 +466,32 @@ not concluded, with its seed-30 estimate (bootstrap exact-rate difference +0.056
 **Files.** Full report: `paper/results/h1-look3.md` (copy of `runs/h1-analysis.md`); LaTeX
 table: `paper/tables/main_h1_analysis.tex`. The previous rescored files are kept in
 `runs/exp-v02/rescored-round4/pre-seed43-backup/`.
+
+**1e-i. Addendum, 2026-10-24 13:01 CDT (CJ: "I just want this to be good science. Please do
+whatever you recommend"; epic #80 decision 19).** This is recorded before any medium row past
+seed 30 is run.
+
+- **H1-medium continues to its third look.** Seeds 31–43, medium only, both arms (harness v0.1
+  32K, plain-128K). The run uses the same code as the small run (e0cbccf; the only change since
+  then is the round-5 Cerebex key fix of 1d-iii), the same engine
+  (`runs/replay/stackA-provenance.json`) and the active scorer set. Rows go into the recorded run
+  files with `--resume`. This is the same rule decision 16 applied to small: a size that has not
+  crossed at looks 1 or 2 runs to 320 pairs. Continuing after looks that did not cross is what the
+  O'Brien–Fleming design allows, and the boundary is unchanged.
+- **Final medium look.** It is run once, when seed 43 finishes: `h1_analysis.py --look 3` on the
+  rescored files, with the 320-pair boundary 2.004. The primary keeps every pair, as
+  pre-registered. Plain `does_not_fit` pairs count against plain; at medium these are about 1 in 8
+  pairs, and the secondary set that drops them is reported beside the primary.
+- **Holm across the two primaries** is applied after the medium look, to both p-values.
+- **How the SHODAN result is reported (set now, before medium is seen).** The primary includes
+  all eight tasks at both sizes. Leave-one-task-out is reported for every task as sensitivity.
+  The paper states that the small result comes from one task (1e). No task is dropped from a
+  primary after the fact.
+- **#108 (SHODAN turn-cap failure) is diagnostic only.** Trajectories are read and failures
+  classified; neither arm changes. If a fix is warranted, it is a new arm with its own rows, never
+  a re-run of recorded H1 rows.
+- **Order of work.** pluto runs H1-medium; #69, #83 and #84 start on pluto after it finishes, so
+  rows from different runs never share the engine at the same time.
 
 ## 2. Validity checks (run first; they can invalidate everything else)
 
