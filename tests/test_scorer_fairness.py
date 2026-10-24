@@ -1,6 +1,8 @@
 """The independent-eval scorers must stay fair: the audit's battery of correct answers in
 reasonable formats and of wrong / hedged answers must raise zero flags on the active set
-(round 4 since 2026-10-23) and on the round-4 set it was copied from (issue #95)."""
+(round 4 since 2026-10-23, round-5 Cerebex since the same day; issues #95, #105) and on the
+round-4 set (the battery takes a directory of all eight lanes, so round 5's single file is
+covered through the active set)."""
 
 from __future__ import annotations
 

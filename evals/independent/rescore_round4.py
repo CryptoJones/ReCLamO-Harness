@@ -1,4 +1,4 @@
-"""Re-score a run file with the round-4 candidate scorers into a NEW file (issue #95).
+"""Re-score a run file with the active (or the round-4) scorer and key set into a NEW file (issue #95, #105).
 
     uv run python evals/independent/rescore_round4.py runs/exp-v02/plain-131k.json \\
         --out runs/exp-v02/rescored-round4/plain-131k.json
@@ -10,7 +10,9 @@ the file's ``meta.rescored`` names the scorer set and its sha256s. Rows whose st
 hit the 2,000-character cap are left at their recorded score and flagged
 ``rescore_skipped`` (the scorer saw text that is gone); the summary counts them.
 
-Until CJ approves TEST-PLAN section 1d this is a diagnostic, not a result.
+TEST-PLAN 1d was approved on 2026-10-23; with ``--set active`` (the default) the output is the
+paper's graded view of a recorded file. Rows whose key changed under the active generators
+(round-5 Cerebex, issue #105) carry ``truth_changed`` from ``run_eval.rescore_rows``.
 """
 
 from __future__ import annotations
@@ -50,12 +52,21 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("run_file")
     p.add_argument("--out", required=True, help="new file; must differ from the input")
+    p.add_argument(
+        "--set",
+        choices=("round4", "active"),
+        default="active",
+        help="scorer/key set: 'active' (the manifest's active set; round 4 plus the round-5 "
+        "Cerebex key fix, TEST-PLAN 1d-iii) or 'round4' (the 2026-10-19 candidates as listed)",
+    )
     args = p.parse_args(argv)
     src, out = Path(args.run_file), Path(args.out)
     if out.resolve() == src.resolve():
         print("rescore_round4: --out must be a new file", file=sys.stderr)
         return 2
-    manifest = round4_manifest(run_eval.load_manifest())
+    manifest = run_eval.load_manifest()
+    if args.set == "round4":
+        manifest = round4_manifest(manifest)
     data = json.loads(src.read_text(encoding="utf-8"))
     meta, rows = data.get("meta", {}), data.get("rows", [])
     changed = run_eval.rescore_rows(rows, run_eval.Generators(manifest))
@@ -65,11 +76,13 @@ def main(argv: list[str] | None = None) -> int:
         "rescored": {
             "from": str(src),
             "at": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),
-            "scorer_set": SET,
-            "status": "diagnostic until TEST-PLAN 1d is approved",
+            "scorer_set": args.set,
+            "status": "TEST-PLAN 1d approved 2026-10-23 (1d-i); active set = round 4 + round-5 Cerebex keys (1d-iii)"
+            if args.set == "active"
+            else "round-4 candidates as listed on 2026-10-19",
             "rows_changed": changed,
             "rows_skipped_truncated": skipped,
-            f"{SET}_sha256": {
+            f"{args.set}_sha256": {
                 lane: manifest["generators"][lane]["active"]["sha256"] for lane in run_eval.LANES
             },
         },
