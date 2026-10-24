@@ -414,6 +414,59 @@ seed 5: both arms answered 7,894; the key said 6,340).
 - **Reporting.** The paper reports Cerebex under the corrected keys and notes the defect; the
   pre-fix numbers remain in the recorded files and in the 1d-ii validation tables.
 
+## 1e. H1 final look: recorded 2026-10-24 (epic #80, decision 17; issues #82, #97)
+
+Dated and appended; earlier sections are not rewritten. H1-small seeds 31–43 finished
+2026-10-24 05:42 CDT with 0 error rows in either arm (8 tasks × 13 seeds per arm). The recorded
+files were regraded with `rescore_round4.py --set active` (round 4, plus the round-5 Cerebex keys
+of 1d-iii) into `runs/exp-v02/rescored-round4/`, and the analysis was run once:
+`h1_analysis.py --runs runs/exp-v02/rescored-round4 --aa-runs runs/exp-v02 --look 3`. Pairs are
+(task, seed), confirmatory seeds 4 onward; positive z favours the harness; boundaries
+3.471 / 2.454 / 2.004 (section 1b). Looks 1 and 2 were recomputed under the same scorer and key
+set (`--seeds 4-17 --look 1`, `--seeds 4-30 --look 2`) so all rows below use one grading.
+
+| Look | Size | n | Harness exact | Plain exact | b | c | z | Exact McNemar p | Boundary | Result |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 17 | small | 112 | 70 | 76 | 11 | 17 | −1.134 | .345 | 3.471 | inside |
+| seed 17 | medium | 112 | 63 | 55 | 11 | 3 | +2.138 | .057 | 3.471 | inside |
+| seed 30 | small | 216 | 135 | 149 | 16 | 30 | −2.064 | .054 | 2.454 | inside |
+| seed 30 | medium | 216 | 121 | 109 | 22 | 10 | +2.121 | .050 | 2.454 | **inside** |
+| seed 43 | small | 320 | 203 | 229 | 22 | 48 | **−3.108** | **.0025** | 2.004 | **crosses** |
+
+**H1-small (confirmatory, final look).** Harness v0.1 32K and plain-128K differ at small, in
+plain's favour: 203 vs 229 exact of 320, z = −3.108, exact McNemar p = .0025. Supporting
+analyses on the same 320 pairs:
+
+- GLMM (task random intercept): arm β = −0.771, SE 0.250, z = −3.09, p = .002, odds ratio 0.46.
+- Task-clustered paired bootstrap: exact-rate difference −0.081, 95% CI [−0.294, 0.072]. With
+  8 task clusters the interval includes 0: the effect is not robust to which tasks are sampled.
+- **The effect is one task.** SHODAN: harness 2/40, plain 32/40 (b = 1, c = 31). Leaving SHODAN
+  out gives z = +0.649 (p = .63); leaving out any other task keeps z between −2.65 and −4.63.
+  39 of 40 harness SHODAN rows hit the 20-turn cap (`max_iterations`) and one the time limit; no
+  harness SHODAN row ended with a submitted answer. It is a harness failure on that task, not a
+  scoring artifact: the plain answers are exact key matches.
+- Without Multivac (1d-ii): z = −2.646, p = .011, still crossing.
+- Sensitivity sets that drop harness turn-cap/timeout rows: n = 228, z = +0.784, p = .56.
+- Harness completion 228/320 (0.71): 87 turn cap, 5 time limit. Plain 320/320.
+- Noise: the A/A floor (plain-32K vs plain-128K, small, both fit) differs on 10 of 56 cells
+  (0.18); the #97 temperature-0 replay floor is 5/48 rows (10%) under round 4. b + c = 70 of 320
+  (0.22) is near that floor; the result rests on the one-sided SHODAN block.
+
+**H1-medium: the stop no longer holds.** 1d-ii recorded medium as crossing at the seed-30 look
+(z = +2.56 > 2.454). That was before the round-5 Cerebex keys. Under the corrected keys, which
+move seven medium seed-4–30 cells (4, 5, 6, 7, 13, 17, 26), medium crosses at neither look (+2.138 at seed 17, +2.121 at
+seed 30). Medium therefore has no confirmatory result yet. Its seed-30 rows stand as a
+look-2 result inside the boundary. Running medium seeds 31–43 to the third look, as 1d-ii did
+for small, is CJ's decision and is not started by this entry. Until then medium is reported as
+not concluded, with its seed-30 estimate (bootstrap exact-rate difference +0.056, 95% CI
+[−0.037, 0.162]).
+
+**Holm across the two primaries** is deferred until medium concludes.
+
+**Files.** Full report: `paper/results/h1-look3.md` (copy of `runs/h1-analysis.md`); LaTeX
+table: `paper/tables/main_h1_analysis.tex`. The previous rescored files are kept in
+`runs/exp-v02/rescored-round4/pre-seed43-backup/`.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
