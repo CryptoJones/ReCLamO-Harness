@@ -24,6 +24,7 @@ Clark (Applied Artificial Intelligence, Eastern University). Tracked in
 |---|---|
 | `main.tex` | The paper (`article`, natbib) |
 | `refs.bib` | References, each checked against a source in hand; unverified fields say TODO |
+| `provenance.md` | What was tested (#87): weight sha256 and Hugging Face revision, draft head, tokenizer and chat-template hashes, Strata commit + local patch + build flags, server command line, hardware |
 | `analysis/make_tables.py` | Reads the run files and writes every results table and number |
 | `analysis/h1_analysis.py` | H1 analysis (#85): task-clustered bootstrap, GLMM, leave-one-task-out, MDE, decision-9 exclusion sets, cost/latency, failure taxonomy, per-task/author/evidence-position breakdowns, A/A floor |
 | `analysis/evidence_positions.json` | Cache of where each confirmatory cell's answer last appears in its context (built from the pinned active generators) |

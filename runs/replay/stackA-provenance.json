@@ -51,7 +51,21 @@
     "mtp_sha256": {
       "mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf": "b646ef60eaae2a9ed849e75f15f399629ca22633555e99e809959e95f22a1575",
       "mtp-Qwen3.8-Flash-Next-shared-Q4_K_M.gguf": "f521868a9e143718bef513772f6e04d9642551e362cf2439636d2abdbd149dfc"
-    }
+    },
+    "mtp_correction_2026-10-23": "The --mtp mtp/rt pack is NOT built from the two Unsloth MTP GGUFs listed above (those served the earlier ik_llama.cpp deployment). Strata fetched the 31 mtp.* tensors from the BF16 checkpoint Qwen/Qwen3.8-Flash-Next at revision de4b8e4d43b917e7706784d8bb445c9af86a3540 on 2026-10-05 and packed them (tools/mtp_fetch.py, mtp_pack.py --experts q2_0, mtp_rt.py). See paper/provenance.md section 1."
   },
-  "same_stack_as_h1": "yes: Strata since 2026-10-05, this model file since 2026-09-23; the H1 rows (2026-10-08 to 2026-10-16) were served by this build and config. The service was restarted on 2026-10-18 19:12 CDT with the same unit."
+  "same_stack_as_h1": "yes: Strata since 2026-10-05, this model file since 2026-09-23; the H1 rows (2026-10-08 to 2026-10-16) were served by this build and config. The service was restarted on 2026-10-18 19:12 CDT with the same unit.",
+  "hf_repo": {
+    "repo": "huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-GGUF",
+    "folder": "UD-Q4_K_XL",
+    "shards_uploaded_in": "7e3bfc316b88 (2026-09-06)",
+    "last_revision_with_shards": "4fdf4dc4d851 (2026-10-09)",
+    "deleted_from_repo": "06a318de4011 (2026-10-11)",
+    "downloaded_to_pluto": "2026-09-22 22:52-23:32 CDT",
+    "recorded": "2026-10-23"
+  },
+  "unit_restarts": [
+    "2026-10-18 19:12 CDT",
+    "2026-10-23 11:52 CDT"
+  ]
 }
