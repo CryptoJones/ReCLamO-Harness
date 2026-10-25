@@ -63,7 +63,7 @@ from typing import Any, Protocol
 import openai
 
 from reclamo.client import Completion, ToolCall, Usage
-from reclamo.config import RLMConfig
+from reclamo.config import RLMConfig, base_prompt_version
 from reclamo.errors import RLMTimeout, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger, VerbosePrinter
 from reclamo.parsing import (
@@ -157,6 +157,13 @@ OPENING_KINDS = ("system", "query", "meta")  # history kinds a cut-down forced f
 RLM_QUERY_PROMPT = (
     "The context holds a task handed down by a parent process: instructions and the "
     "data they apply to. Carry out the task and finish with the result."
+)
+# Issue #83: what a sub-call raises inside the model's code when the run allows none
+# (max_subcalls_per_run = 0, the REPL-only ablation). It is an ordinary REPL error: the
+# model sees it as the block's output and the run continues.
+SUBCALLS_DISABLED = (
+    "{kind} is disabled in this run: no sub-calls are available. Work on `context` "
+    "with Python alone."
 )
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # Qwen writes FINAL_VAR(answer['content']) after filling the answer dict without
@@ -993,7 +1000,7 @@ class RLM:
         and what arrived is not a usable action (no complete code block, an unclosed
         one, or no FINAL). v0.1 only retried a reply with no content at all."""
         if (
-            self.cfg.prompt_version == "v0.1"
+            base_prompt_version(self.cfg.prompt_version) == "v0.1"
             or self.cfg.planner_style != "reclamo"
             or completion.finish_reason != "length"
             or completion.tool_calls
@@ -1103,6 +1110,8 @@ class RLM:
         cfg = self.cfg
         answers: list[str] = []
         for i, prompt in enumerate(prompts):
+            if budget.max_subcalls == 0:  # sub-calls disabled (issue #83)
+                raise RuntimeError(SUBCALLS_DISABLED.format(kind=kind))
             if budget.subcalls >= budget.max_subcalls:
                 raise RuntimeError(
                     f"sub-call budget for this run exhausted ({budget.max_subcalls}); "

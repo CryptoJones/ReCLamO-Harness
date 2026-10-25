@@ -96,7 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=PROMPT_VERSIONS,
         default=None,
         help="reclamo root prompt version: v0.2 (default, delegation-friendly) or v0.1 "
-        "(the prompt the published results used)",
+        "(the prompt the published results used); v0.1-repl-only is v0.1 with sub-calls "
+        "removed and disabled (issue #83)",
     )
     run.set_defaults(func=cmd_run)
     return parser

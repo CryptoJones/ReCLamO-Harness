@@ -42,8 +42,19 @@ PROTOCOLS = ("fence", "tools")
 PLANNER_STYLES = ("reclamo", "upstream-rlm-v0")
 # The reclamo root prompt's version (issue #59): "v0.1" reproduces the published
 # results byte for byte, "v0.2" follows the paper's main prompt on delegation.
-PROMPT_VERSIONS = ("v0.1", "v0.2")
+# "v0.1-repl-only" (issue #83) is the REPL-only ablation: v0.1 with every sub-call
+# removed from the prompt and max_subcalls_per_run = 0; everything else is v0.1's.
+REPL_ONLY_VERSION = "v0.1-repl-only"
+PROMPT_VERSIONS = ("v0.1", "v0.2", REPL_ONLY_VERSION)
 DEFAULT_PROMPT_VERSION = "v0.2"
+
+
+def base_prompt_version(version: str) -> str:
+    """The version whose limits and behaviour ``version`` inherits: "v0.1" for the
+    REPL-only ablation, else ``version`` itself."""
+    return "v0.1" if version == REPL_ONLY_VERSION else version
+
+
 # v0.1's fixed per-call size hint, and how v0.2 derives one from the sub model's
 # window when ``subcall_chars`` is unset: (window - sub max_tokens) tokens, less a
 # margin for the question and wrapper text, at a conservative 3 chars per token
@@ -74,12 +85,16 @@ VERSION_DEFAULTS: dict[str, dict[str, Any]] = {
         "max_timeout": 3_600.0,
     },
 }
+# The REPL-only ablation (issue #83) is v0.1 with sub-calls disabled; nothing else moves.
+# max_subcalls_per_exec keeps v0.1's 24 so that a call reaches the run budget's
+# "disabled" message rather than the per-block cap's.
+VERSION_DEFAULTS[REPL_ONLY_VERSION] = {**VERSION_DEFAULTS["v0.1"], "max_subcalls_per_run": 0}
 
 
 # Per-request timeout (seconds) when a role leaves ``timeout`` unset. v0.2 raises it
 # from 300 to 900 s: an 8,192-token thinking reply at ~35 tok/s (Strata, two slots) is
 # ~234 s of decode before any prompt reading, so 300 s cut long root turns short.
-ROLE_TIMEOUT_DEFAULTS = {"v0.1": 300.0, "v0.2": 900.0}
+ROLE_TIMEOUT_DEFAULTS = {"v0.1": 300.0, "v0.2": 900.0, REPL_ONLY_VERSION: 300.0}
 
 
 def role_max_tokens_default(version: str, role: str, enable_thinking: bool) -> int:
@@ -88,8 +103,9 @@ def role_max_tokens_default(version: str, role: str, enable_thinking: bool) -> i
     v0.1: root 4,096, sub 2,048 (the built-in profiles' values when the results were
     published). v0.2: root 8,192 with thinking on, else 4,096 (paper App. B: thinking
     models "without sufficient output tokens struggle as RLMs"); sub 4,096.
+    v0.1-repl-only takes v0.1's values.
     """
-    if version == "v0.1":
+    if base_prompt_version(version) == "v0.1":
         return 4_096 if role == "root" else 2_048
     if role == "root":
         return 8_192 if enable_thinking else 4_096
@@ -269,12 +285,28 @@ class RLMConfig:
         if self.subcall_chars is not None and self.subcall_chars < 1:
             raise ConfigError(f"subcall_chars must be positive, not {self.subcall_chars}")
         self._apply_version_defaults()
+        if self.prompt_version == REPL_ONLY_VERSION:
+            self._check_repl_only()
         if self.planner_style != "reclamo" and self.protocol != "fence":
             raise ConfigError(
                 f"planner_style {self.planner_style!r} speaks fenced ```repl code and "
                 f'FINAL text; it needs protocol = "fence", not {self.protocol!r}'
             )
         self.endpoints()  # validates that roles sharing a base_url agree
+
+    def _check_repl_only(self) -> None:
+        """The REPL-only ablation (issue #83) has one shape: the reclamo fence prompt
+        with no sub-calls. Any other combination would advertise or allow them."""
+        if self.protocol != "fence" or self.planner_style != "reclamo":
+            raise ConfigError(
+                f'prompt_version {REPL_ONLY_VERSION!r} needs protocol "fence" and '
+                f'planner_style "reclamo", not {self.protocol!r} / {self.planner_style!r}'
+            )
+        if self.max_subcalls_per_run != 0:
+            raise ConfigError(
+                f"prompt_version {REPL_ONLY_VERSION!r} needs max_subcalls_per_run = 0, "
+                f"not {self.max_subcalls_per_run}"
+            )
 
     def _apply_version_defaults(self) -> None:
         """Fill unset fields from VERSION_DEFAULTS / role_max_tokens_default.
@@ -321,7 +353,7 @@ class RLMConfig:
         """
         if self.subcall_chars is not None:
             return self.subcall_chars
-        if self.prompt_version == "v0.1" or self.planner_style != "reclamo":
+        if base_prompt_version(self.prompt_version) == "v0.1" or self.planner_style != "reclamo":
             return V01_SUBCALL_CHARS
         window = self.sub.context_tokens or self.context_tokens
         room = (window - self.sub.max_tokens) * (1 - SUBCALL_MARGIN)
