@@ -19,6 +19,11 @@ The tasks are the eight generators in ``fixed/active/``, each scored by **its ow
 - ``plain-think`` / ``plain-nothink`` (opt-in): the same single call with thinking forced
   on / off, each its own row. Nothing chooses between attempts using the answer key
   (issue #57); rows written before that are best-of-2 and load per ``--legacy-plain``.
+- ``mapreduce`` (opt-in, issue #84): the fixed-chunk map-reduce baseline
+  (``bench.run_mapreduce``): the document cut into fixed chunks sized to the reader
+  (``sub`` role) window, one reader call per chunk, one root-role aggregation call. Run
+  it with ``--prompt-version v0.1`` so the reader and root output caps are harness
+  v0.1's (2,048 / 4,096).
 
 Every row is written as soon as it finishes; ``--resume FILE`` skips rows already present
 with the same task, size, mode and seed (bench.py's semantics). A markdown summary is
@@ -66,7 +71,7 @@ LANES = (
     "Multivac",
 )
 SIZES = ("small", "medium", "large")
-MODES = ("rlm", "plain", "plain-think", "plain-nothink")
+MODES = ("rlm", "plain", "plain-think", "plain-nothink", "mapreduce")
 DEFAULT_MODES = ("rlm", "plain")
 PLAIN_MODES = ("plain", "plain-think", "plain-nothink")
 RowRunner = Callable[[str, str, str, int], dict[str, Any]]
@@ -198,6 +203,8 @@ def run_row(
     if mode == "rlm":
         row["protocol"] = cfg.protocol
         row.update(bench.run_rlm(cfg, client, inst, log_dir))
+    elif mode == "mapreduce":
+        row.update(bench.run_mapreduce(cfg, client, inst))
     else:
         row.update(
             bench.run_plain(
@@ -497,7 +504,7 @@ def format_summary(rows: list[dict[str, Any]], manifest: dict[str, Any] | None =
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for size in sizes:
-        for mode in ("rlm", "rlm:tools", *PLAIN_MODES):
+        for mode in ("rlm", "rlm:tools", *PLAIN_MODES, "mapreduce"):
             group = [r for (_l, s, m), g in groups.items() if s == size and m == mode for r in g]
             if not group:
                 continue
@@ -526,6 +533,10 @@ def format_dry_run(
             seen[(lane, size, seed)] = (len(inst.context), fits, est)
         chars, fits, est = seen[(lane, size, seed)]
         verdict = ("fits" if fits else "does not fit") if mode in PLAIN_MODES else ""
+        if mode == "mapreduce":
+            inst = build_instance(gens, lane, size, seed)
+            n = len(bench.split_fixed(inst.context, bench.chunk_token_budget(cfg, inst.query)))
+            verdict = f"{n} chunk(s) + 1 aggregation"
         lines.append(
             f"{lane:17} {size:7} {mode:13} seed={seed}  {chars:>10,} chars ~{est:>7,} tokens  "
             f"{verdict}"
@@ -722,6 +733,11 @@ def main(argv: list[str] | None = None) -> int:
         "root_max_tokens": cfg.root.max_tokens,
         "plain_max_tokens": args.plain_max_tokens,
         "plain_rule": f"bench.run_plain: {bench.PLAIN_RULE}",
+        **(
+            {"mapreduce_rule": f"bench.run_mapreduce: {bench.MAPREDUCE_RULE}"}
+            if "mapreduce" in modes
+            else {}
+        ),
         "root_enable_thinking": cfg.root.enable_thinking,
         "sampling": sampling_record(cfg),
         "token_estimate": "bench.estimate_tokens: one token per digit, else chars/3.5",
