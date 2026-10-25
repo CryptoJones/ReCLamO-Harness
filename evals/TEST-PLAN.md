@@ -493,6 +493,62 @@ seed 30 is run.
 - **Order of work.** pluto runs H1-medium; #69, #83 and #84 start on pluto after it finishes, so
   rows from different runs never share the engine at the same time.
 
+## 1f. H1-medium final look: recorded 2026-10-25 (epic #80, decision 19; issue #82)
+
+Medium seeds 31–43 finished 2026-10-25 09:15 CDT: 104 rows per arm, no error rows left (the six
+from the 2026-10-24 14:33 pluto reboot were quarantined and re-run, 1e-i procedure). Both arms
+were regraded with the active scorer set into `runs/exp-v02/rescored-round4/`; no row reported in
+1e changed, and the 208 new rows were the only additions. The look was then run once, as 1e-i
+specifies. (A first call exited on a wrong `--out` argument before printing or writing anything;
+the second call is the look.)
+
+**H1-medium crosses the look-3 boundary, in the harness's favour.**
+
+| Look | Size | n | Harness exact | Plain exact | b | c | z | exact p | Boundary | Result |
+|---|---|---|---|---|---|---|---|---|---|---|
+| seed 43 | medium | 320 | 177 | 162 | 31 | 16 | +2.188 | .040 | 2.004 | crosses, harness favoured |
+
+Seeds 31–43 added b = 9, c = 6 to the seed-30 counts (b = 22, c = 10).
+
+**Holm across the two primaries** (1b; applied now, per 1e-i): small p = .0025 → .005; medium
+p = .040 → .040. Both stay below .05. This is a sensitivity check; each size is its own question,
+and no claim combines them.
+
+**How strong the medium result is.**
+- The margin is one pair. With b = 30, c = 17 the z would be +1.896, inside the boundary.
+  b + c = 47 of 320 (0.15), close to the #97 replay noise floor (10%) and below the A/A floor (0.18).
+- Task-clustered bootstrap: exact-rate difference +0.047, 95% CI [−0.047, 0.163]. The interval
+  includes 0.
+- GLMM (task random intercept): β = +0.543, SE 0.272, z = +1.99, p = .046, odds ratio 1.72.
+- **Secondary set (plain `does_not_fit` pairs dropped): n = 280, z = +1.677, p = .126; does not
+  cross.** Plain cannot fit any medium GLaDOS context (40/40 `does_not_fit`); the harness gets
+  4 of those 40. The pre-registered primary counts them against plain, which is the question H1
+  asks (can the harness answer what the plain model cannot read), but the crossing depends on them.
+- Leave-one-task-out: without Neuromancer z = 0.000; without GLaDOS +1.677; without SELMA +1.982;
+  every other drop keeps z between +2.19 and +3.36. Without Multivac (1d-ii): z = +2.466, p = .020.
+- **The effect is mostly one task.** Neuromancer: harness 32/40, plain 17/40 (b = 18, c = 3).
+  15 of the 18 plain losses are normal finishes with a wrong answer; 3 hit the output-length cap.
+- Cerebex goes the other way (harness 29, plain 35; b = 1, c = 7). SHODAN is 0/40 for both arms:
+  plain hits the output-length cap on all 40; the harness hits the turn cap on 37 and the time limit on 3.
+- Sensitivity sets: plain length rows dropped, n = 276, z = +1.809 (no); harness turn-cap/timeout
+  rows dropped, n = 202, z = +2.920 (yes); both arms finished, n = 197, z = +2.401 (yes).
+- Completion: harness 202/320 (111 turn cap, 7 time limit); plain 236/320 (40 does not fit,
+  44 output-length cap: SHODAN 40, Neuromancer 4).
+
+**What H1 says, both sizes together.** The two sizes point in opposite directions, and each
+result rests on one or two tasks: small favours plain because of SHODAN (#108, the v0.1 turn and
+output budget); medium favours the harness because of Neuromancer and the GLaDOS inputs that do
+not fit plain-128K. Neither supports a general claim that the harness is better or worse than
+plain long context. The paper reports both primaries as crossing, with the leave-one-task-out
+tables beside them, and says this in the abstract.
+
+**H1 is concluded at both sizes.** No further H1 rows are run. Per 1e-i, pluto moves to #69, then
+#83 and #84.
+
+**Files.** Full report: `paper/results/h1-look3.md` (copy of `runs/h1-analysis.md`; its small
+section is byte-identical to the 1e version); LaTeX table: `paper/tables/main_h1_analysis.tex`.
+The previous rescored files are kept in `runs/exp-v02/rescored-round4/pre-medium43-backup/`.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
