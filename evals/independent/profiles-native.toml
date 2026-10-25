@@ -1,0 +1,47 @@
+# Native-sampling twins of the built-in pluto profiles (issue #69, H5; TEST-PLAN 1g).
+#
+# Each profile below is the built-in profile of the same base name with ONE change: root
+# and sub-call sampling are the defaults embedded in the served GGUF
+# (Qwen3.8-Flash-Next-UD-Q4_K_XL shard 1, sha256 290a31ca...8903, read 2026-10-25):
+#   general.sampling.temp = 1.0, general.sampling.top_p = 0.95, general.sampling.top_k = 20.
+# The GGUF sets no min_p and no penalties. Strata forwards min_p and penalties only when
+# they are non-zero, so leaving them out means "off", as in the preset root role.
+#
+# Use:  run_eval.py --profiles evals/independent/profiles-native.toml --profile pluto-native
+# tests/test_native_profiles.py checks that each twin differs from its base in sampling only.
+
+[profiles.pluto-native]
+base_url = "http://pluto:8083/v1"
+api_key_cmd = "pass pluto/flashnext-api-key"
+concurrency = 2
+context_tokens = 32768
+
+[profiles.pluto-native.root]
+model = "qwen3.8-flash-next"
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20 }
+
+[profiles.pluto-native.sub]
+model = "qwen3.8-flash-next"
+enable_thinking = false
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20 }
+
+[profiles.pluto-long-native]
+base_url = "http://pluto:8083/v1"
+api_key_cmd = "pass pluto/flashnext-api-key"
+concurrency = 2
+context_tokens = 131072
+
+[profiles.pluto-long-native.root]
+model = "qwen3.8-flash-next"
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20 }
+timeout = 1800.0
+
+[profiles.pluto-long-native.sub]
+model = "qwen3.8-flash-next"
+enable_thinking = false
+sampling = { temperature = 1.0, top_p = 0.95, top_k = 20 }
+timeout = 1800.0

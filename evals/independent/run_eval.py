@@ -158,6 +158,11 @@ def _jsonable(value: Any) -> Any:
 # --- one row -------------------------------------------------------------------------
 
 
+def sampling_record(cfg: RLMConfig) -> dict[str, dict[str, Any]]:
+    """The sampling each role sends, as recorded in the meta block and on every row (#69)."""
+    return {"root": dict(cfg.root.sampling), "sub": dict(cfg.sub.sampling)}
+
+
 def run_row(
     cfg: RLMConfig,
     client: Any,
@@ -718,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
         "plain_max_tokens": args.plain_max_tokens,
         "plain_rule": f"bench.run_plain: {bench.PLAIN_RULE}",
         "root_enable_thinking": cfg.root.enable_thinking,
+        "sampling": sampling_record(cfg),
         "token_estimate": "bench.estimate_tokens: one token per digit, else chars/3.5",
         "active_sha256": {lane: manifest["generators"][lane]["active"]["sha256"] for lane in LANES},
         "created": meta.get("created", stamp),
@@ -735,8 +741,10 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
+    sampling = sampling_record(cfg)
+
     def runner(lane: str, size: str, mode: str, seed: int) -> dict[str, Any]:
-        return run_row(
+        row = run_row(
             cfg,
             client,
             gens,
@@ -747,6 +755,8 @@ def main(argv: list[str] | None = None) -> int:
             args.log_dir,
             plain_max_tokens=args.plain_max_tokens,
         )
+        row["sampling"] = sampling  # #69: preset vs native; rows before #69 lack it (preset)
+        return row
 
     def save(_row: dict[str, Any]) -> None:
         write_rows(out, meta, rows)

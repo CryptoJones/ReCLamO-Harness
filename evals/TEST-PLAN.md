@@ -549,6 +549,75 @@ tables beside them, and says this in the abstract.
 section is byte-identical to the 1e version); LaTeX table: `paper/tables/main_h1_analysis.tex`.
 The previous rescored files are kept in `runs/exp-v02/rescored-round4/pre-medium43-backup/`.
 
+## 1g. Amendment: the native-sampling grid (H5, #69), recorded 2026-10-25 before any native row
+
+This implements CJ's 2026-10-09 decision (section 6b; 1a H5): repeat the main grid with the model's
+own sampling. It is written before any native-sampling row exists.
+
+**What runs.** Every (arm, size, seed) cell the preset grid has in `runs/exp-v02/` for seeds 2–9,
+once, with nothing added or dropped:
+
+| Arm | Profile (native) | Prompt | Mode | Cells |
+|---|---|---|---|---|
+| plain-32k | pluto-native | v0.2 | plain | small seeds 2–9; medium seeds 2–3 |
+| plain-131k | pluto-long-native | v0.2 | plain | small and medium, seeds 2–9 |
+| h-v01-32k | pluto-native | v0.1 | rlm | small, medium and large, seeds 2–9 |
+| h-v02-131k | pluto-long-native | v0.2 | rlm | small, medium and large, seeds 2–9 |
+| h-v02-32k | pluto-native | v0.2 | rlm | small and medium, seeds 2–3 |
+
+That is 624 rows. They go to `runs/exp-v02-native/<arm>.json`, never `--resume` into the preset
+files, and the two grids are never pooled.
+
+**What changes: sampling only.**
+- Root and sub-calls use the defaults embedded in the served GGUF: temperature 1.0, top_p 0.95,
+  top_k 20. These were read from shard 1 on 2026-10-25; its sha256 `290a31ca…8903` matches
+  `paper/provenance.md`.
+- The GGUF sets no min_p and no penalties. Strata forwards those only when non-zero, so leaving
+  them out means off.
+- The preset was root 0.6 / 0.95 / 20 / min_p 0, and sub 0.7 / 0.8 / 20 / presence_penalty 1.0.
+- The native profiles (`pluto-native`, `pluto-long-native`) are in
+  `evals/independent/profiles-native.toml`. `tests/test_native_profiles.py` checks that each
+  differs from its built-in twin in sampling and nothing else.
+- Every native row, and the file's meta block, records the sampling it used. Rows without the
+  field are preset rows.
+
+**What stays the same.**
+- Harness code: nothing under `src/` has changed since d816814, the commit the preset grid ran
+  from.
+- Engine and model: Strata a4b679b1 with the same unit, config and GGUF (`paper/provenance.md`).
+  Every preset row was made between 2026-10-08 and 2026-10-12, after Strata went live on
+  2026-10-05.
+- Prompts, limits and the fit rule.
+- Scoring: both grids are graded with the active scorer set (`rescore_round4.py --set active`)
+  before any comparison.
+
+**What cannot be held fixed.**
+- Wall-clock timing and slot sharing. Run order follows the preset scripts:
+  - seeds 2–3: arm by arm, one size at a time;
+  - seeds 4–9: plain arms first, then the two harness arms in parallel;
+  - large: the two harness arms in parallel.
+- Row-level sampling noise. The A/A floor (0.18) and the #97 replay floor (10%) apply here too.
+
+**Analysis, fixed now.**
+- **H5 (secondary).** For each arm and size, preset vs native on the same (task, seed) pairs,
+  seeds 4–9: two-sided exact McNemar, 48 pairs per cell.
+  - Pairs with a `not_run` row in either grid are excluded pairwise (#56).
+  - The minimum detectable effect is reported per cell. With 48 pairs and this noise floor, only
+    large sampling effects can be detected, and a null result is reported as "not detected",
+    never as "no effect".
+  - Holm across the H5 cells is reported. Nothing here is confirmatory.
+- **Do the H1 and H2 directions hold under native sampling?** On native seeds 4–9, per size:
+  - H1: h-v01-32k vs plain-131k;
+  - H2: h-v02-131k vs h-v01-32k.
+
+  Each is reported with the exact-rate difference and the task-clustered bootstrap CI, beside the
+  preset estimate for the same seeds. These are estimates, not tests, and they do not revisit the
+  H1 result in 1e and 1f.
+- Seeds 2–3 are exploratory and reported separately.
+
+**Order.** The native grid runs now. #83 and #84 follow it on pluto, so rows from different runs
+never share the engine at the same time.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
