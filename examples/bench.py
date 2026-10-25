@@ -24,6 +24,10 @@ this file adds the grid, the modes and the bookkeeping:
 - ``plain_truncated`` (opt-in): the plain call with the context cut to fit,
   clearly labelled; it shows what a window-limited model gets.
 
+``run_mapreduce`` (issue #84) is the fixed-chunk map-reduce baseline, run by
+``evals/independent/run_eval.py --modes mapreduce``; its rules are documented above
+its code.
+
 No plain mode looks at the answer key before it is scored (issue #57). Rows written
 before that change hold two plain variants (``variants``) and the better of the two
 chosen against the truth (``chosen``); they still load, and by default summarise as
@@ -54,6 +58,7 @@ import statistics
 import sys
 import time
 from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -472,6 +477,239 @@ def run_plain(
         _plain_call(
             client, messages, spec, inst.truth, enable_thinking=thinking, max_tokens=max_tokens
         )
+    )
+    return row
+
+
+# --- fixed-chunk map-reduce baseline (issue #84) -------------------------------------
+#
+# A non-recursive, non-adaptive comparator (epic #80, H6). Nothing in it looks at the
+# document's structure or at an answer before the final one is scored.
+#
+# 1. Chunking. The reader is the profile's ``sub`` role, the model and sampling the
+#    harness's sub-calls use. One map prompt may use the reader's window
+#    (``sub.context_tokens``, else the profile's ``context_tokens``) minus the reader's
+#    output reserve (``sub.max_tokens``): the plain baseline's fit rule
+#    (``usable_tokens``), applied to the reader. The chunk budget is that, less the map
+#    prompt's own overhead (its text with an empty chunk, the question and six-digit
+#    part numbers), counted with ``estimate_tokens``, the estimate every fit decision
+#    here uses. The document is cut from the start into consecutive chunks. Each is the
+#    longest piece whose estimate fits the budget, moved back to just after the last
+#    newline when that newline lies in the piece's second half (so no more than half a
+#    chunk is given up to keep lines whole); otherwise the cut is hard. No other
+#    splitting rule applies: no overlap, no headers, no semantics.
+# 2. Map. One reader call per chunk (``MAPREDUCE_MAP_PROMPT``, a single user message,
+#    as a harness sub-call is), run up to the endpoint's concurrency at a time.
+# 3. Reduce. One aggregation call on the ``root`` role (``MAPREDUCE_REDUCE_PROMPT``).
+#    The root role is used, not the reader, because in every arm this one is compared
+#    with the final answer is written by the root configuration: the harness's root,
+#    and the plain call run with the root's thinking. The arms then differ in how the
+#    document is read, not in what writes the answer. The aggregation always runs, even
+#    for a single chunk. Its prompt must fit the root's window minus ``root.max_tokens``;
+#    if the per-chunk answers do not fit, every answer is cut to the same first ``k``
+#    characters (the largest ``k`` that fits), the prompt says so, and the row records
+#    ``aggregate_truncated`` and ``aggregate_answer_chars = k``.
+#
+# The row has the rlm/plain keys (answer, score, correct, subcalls, tokens,
+# prompt_tokens, completion_tokens, seconds, stop_reason, error). ``subcalls`` is the
+# number of reader calls, ``calls`` that plus the aggregation, and ``tokens`` the usage
+# summed over all of them. A failed request ends the row as an error, as in run_plain.
+
+MAPREDUCE_MAP_PROMPT = (
+    "You are reading part {i} of {n} of a longer document. The document was cut into "
+    "parts of a fixed size, so a part can begin or end in the middle of a record. Using "
+    "only this part, answer the question below. If the question is about the whole "
+    "document (a count, a total, a list), answer it for this part alone. If this part "
+    'holds nothing that bears on the question, reply "Nothing relevant in this part." '
+    "Keep the reply short and quote the lines it rests on.\n"
+    "\n"
+    "=== DOCUMENT PART {i} OF {n} ===\n"
+    "{chunk}\n"
+    "=== END PART ===\n"
+    "\n"
+    "Question: {query}"
+)
+MAPREDUCE_REDUCE_PROMPT = (
+    "A long document was cut into {n} parts of a fixed size, and a reader answered the "
+    "question below for each part on its own, seeing only that part. Their answers "
+    "follow in document order. Combine them into one final answer to the question. "
+    "Where the question is about the whole document, combine across parts; where parts "
+    "disagree, decide from the evidence they quote; ignore parts with nothing relevant. "
+    "Reply with the final answer, in the form the question asks for.{note}\n"
+    "\n"
+    "{answers}\n"
+    "\n"
+    "Question: {query}"
+)
+MAPREDUCE_PART = "=== ANSWER FOR PART {i} OF {n} ===\n{answer}"
+MAPREDUCE_CUT_NOTE = " Each part's answer was cut to its first {chars:,} characters to fit."
+# A cut moves back to a newline only if that keeps at least this share of the chunk.
+MAPREDUCE_NEWLINE_KEEP = 0.5
+_HEADER_PART_NUMBER = 999_999  # sizes the part header for any part count up to that
+MAPREDUCE_ANSWER_CHARS = 1_000  # per-chunk answer kept on the row, for inspection
+MAPREDUCE_RULE = (
+    "fixed chunks of (sub window - sub.max_tokens - map prompt overhead) estimated tokens, "
+    "cut back to a newline in the chunk's second half; one sub-role call per chunk; one "
+    "root-role aggregation, answers cut to an equal share if they do not fit"
+)
+
+
+def _window(cfg: RLMConfig, role: str) -> int:
+    return cfg.role(role).context_tokens or cfg.context_tokens
+
+
+def map_prompt(chunk: str, query: str, i: int, n: int) -> str:
+    return MAPREDUCE_MAP_PROMPT.format(i=i, n=n, chunk=chunk, query=query)
+
+
+def reduce_prompt(answers: list[str], query: str, cut_chars: int | None = None) -> str:
+    n = len(answers)
+    parts = "\n\n".join(
+        MAPREDUCE_PART.format(i=i, n=n, answer=a.strip()) for i, a in enumerate(answers, 1)
+    )
+    note = "" if cut_chars is None else MAPREDUCE_CUT_NOTE.format(chars=cut_chars)
+    return MAPREDUCE_REDUCE_PROMPT.format(n=n, note=note, answers=parts, query=query)
+
+
+def chunk_token_budget(cfg: RLMConfig, query: str) -> int:
+    """Estimated tokens one chunk may hold (rule 1 above)."""
+    overhead = estimate_tokens(map_prompt("", query, _HEADER_PART_NUMBER, _HEADER_PART_NUMBER))
+    return _window(cfg, "sub") - cfg.sub.max_tokens - overhead
+
+
+def split_fixed(text: str, budget: int) -> list[str]:
+    """Cut ``text`` into consecutive chunks whose ``estimate_tokens`` is at most
+    ``budget`` (rule 1 above). The chunks concatenate back to ``text``."""
+    if budget < 1:
+        raise ValueError(f"chunk budget must be positive, not {budget}")
+    # Prefix digit counts make each estimate O(1); the result equals estimate_tokens.
+    digits = [0]
+    for ch in text:
+        digits.append(digits[-1] + (ch in "0123456789"))
+
+    def est(start: int, end: int) -> int:
+        d = digits[end] - digits[start]
+        return d + math.ceil((end - start - d) / CHARS_PER_TOKEN)
+
+    chunks: list[str] = []
+    pos = 0
+    while pos < len(text):
+        if est(pos, len(text)) <= budget:
+            end = len(text)
+        else:
+            lo, hi = pos + 1, len(text)  # est(pos, lo) <= budget < est(pos, hi)
+            while hi - lo > 1:
+                mid = (lo + hi) // 2
+                if est(pos, mid) <= budget:
+                    lo = mid
+                else:
+                    hi = mid
+            end = lo
+            newline = text.rfind("\n", pos, end)
+            if newline >= 0 and newline + 1 - pos >= (end - pos) * MAPREDUCE_NEWLINE_KEEP:
+                end = newline + 1
+        chunks.append(text[pos:end])
+        pos = end
+    return chunks
+
+
+def fit_reduce(cfg: RLMConfig, answers: list[str], query: str) -> tuple[str, int | None]:
+    """The aggregation prompt and the per-answer cut (None when nothing was cut)."""
+    budget = _window(cfg, "root") - cfg.root.max_tokens
+    prompt = reduce_prompt(answers, query)
+    if estimate_tokens(prompt) <= budget:
+        return prompt, None
+
+    def fits(k: int) -> bool:
+        return estimate_tokens(reduce_prompt([a.strip()[:k] for a in answers], query, k)) <= budget
+
+    lo, hi = 0, max(len(a.strip()) for a in answers)  # the largest k that fits
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if fits(mid):
+            lo = mid
+        else:
+            hi = mid
+    while lo > 0 and not fits(lo):  # the note's own digits can break monotonicity
+        lo -= 1
+    return reduce_prompt([a.strip()[:lo] for a in answers], query, lo), lo
+
+
+def _usage_sum(completions: list[Any], field: str) -> int | None:
+    values = [getattr(c.usage, field) for c in completions if c.usage is not None]
+    return sum(values) if values else None
+
+
+def run_mapreduce(cfg: RLMConfig, client: Any, inst: Instance) -> dict[str, Any]:
+    """One fixed-chunk map-reduce row (issue #84; the rules are above)."""
+    spec = TASKS[inst.task]
+    started = time.monotonic()
+    budget = chunk_token_budget(cfg, inst.query)
+    chunks = split_fixed(inst.context, budget) or [""]
+    n = len(chunks)
+    row: dict[str, Any] = {
+        "chunks": n,
+        "chunk_token_budget": budget,
+        "chunk_chars": [len(c) for c in chunks],
+        "reader_max_tokens": cfg.sub.max_tokens,
+        "aggregate_max_tokens": cfg.root.max_tokens,
+        "turns": None,
+        "trajectory": None,
+    }
+    done: list[Any] = []
+
+    def read(item: tuple[int, str]) -> Any:
+        i, chunk = item
+        messages = [{"role": "user", "content": map_prompt(chunk, inst.query, i, n)}]
+        c = client.complete(messages, "sub")
+        done.append(c)
+        return c
+
+    try:
+        workers = max(1, cfg.endpoint("sub").concurrency)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            maps = list(pool.map(read, enumerate(chunks, 1)))
+        answers = [c.content for c in maps]
+        prompt, cut = fit_reduce(cfg, answers, inst.query)
+        row.update(
+            map_answers=[a[:MAPREDUCE_ANSWER_CHARS] for a in answers],
+            map_stop_reasons=[c.finish_reason or "stop" for c in maps],
+            aggregate_truncated=cut is not None,
+            aggregate_answer_chars=cut,
+            aggregate_est_prompt_tokens=estimate_tokens(prompt),
+        )
+        final = client.complete([{"role": "user", "content": prompt}], "root")
+        done.append(final)
+    except Exception as exc:  # a failed request: record it, keep the run going
+        row.update(
+            answer="",
+            score=0.0 if spec.metric == "accuracy" else None,
+            correct=False,
+            subcalls=sum(1 for c in done if c.role == "sub"),
+            calls=len(done),
+            tokens=_usage_sum(done, "total_tokens"),
+            prompt_tokens=_usage_sum(done, "prompt_tokens"),
+            completion_tokens=_usage_sum(done, "completion_tokens"),
+            seconds=round(time.monotonic() - started, 2),
+            stop_reason="error",
+            error=f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else ''}",
+        )
+        return row
+    scored = spec.score(final.content, inst.truth)
+    row.update(
+        answer=final.content[:2000],
+        score=scored.score,
+        correct=scored.correct,
+        **scored.detail,
+        subcalls=n,
+        calls=n + 1,
+        tokens=_usage_sum(done, "total_tokens"),
+        prompt_tokens=_usage_sum(done, "prompt_tokens"),
+        completion_tokens=_usage_sum(done, "completion_tokens"),
+        content_from_reasoning=final.content_from_reasoning,
+        seconds=round(time.monotonic() - started, 2),
+        stop_reason=final.finish_reason or "stop",
+        error=None,
     )
     return row
 
