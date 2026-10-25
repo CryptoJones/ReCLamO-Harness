@@ -618,6 +618,75 @@ files, and the two grids are never pooled.
 **Order.** The native grid runs now. #83 and #84 follow it on pluto, so rows from different runs
 never share the engine at the same time.
 
+## 1h. Amendment: the two baseline arms (H6, H7; #84, #83), recorded 2026-10-25 before any baseline row
+
+The code for both arms is merged (PR #113 for #83, PR #114 for #84; main db6e9e4). This entry
+fixes how they run and how they are compared, before any row exists.
+
+**The arms.**
+- **H7, REPL-only (#83).**
+  - Settings: `--profile pluto --prompt-version v0.1-repl-only --modes rlm`.
+  - Prompt: the v0.1 fence prompt for the same settings, with exactly the pieces
+    `prompts.repl_only_removals` lists cut out (the sub-call line, the `llm_query` /
+    `llm_query_batched` bullets, the "sub-calls are expensive" and "Two ways to decompose"
+    sections). Nothing is added.
+  - Budget: `max_subcalls_per_run = 0`. A call made anyway raises "llm_query is disabled in this
+    run" inside the model's code, and the run continues.
+  - Every other limit is v0.1's: 20 turns, 2,000-character output truncation, root 4,096 / sub
+    2,048 tokens, 300 s per request.
+  - **History compaction is kept.** When old REPL output overflows the 32K window, the harness
+    summarises it with one `sub`-role call, as v0.1 does. That is harness machinery, not a
+    model-issued sub-call, so it stays; the ablation removes only what the model can call.
+    Compaction events are counted from the trajectories and reported.
+- **H6, fixed-chunk map-reduce (#84).**
+  - Settings: `--profile pluto --prompt-version v0.1 --modes mapreduce`.
+  - Chunks: sized to the reader (`sub` role) window, which is the 32K window minus `sub.max_tokens`
+    (2,048) minus the map prompt's overhead, counted with `bench.estimate_tokens`. The document is
+    cut into consecutive chunks; a cut moves back to the last newline when that newline is in the
+    chunk's second half.
+  - Map: one reader call per chunk, with the model and sampling of harness sub-calls.
+  - Aggregation: one call on the root role (thinking on, 4,096 tokens). If the per-chunk answers
+    do not fit, each is cut to the same length, and the row records it.
+  - At this window every small document is a single chunk, so at small the arm is one reader call
+    plus the aggregation. A seed-4 dry run gives 3–5 chunks at medium and 12–21 at large. This
+    follows #84's acceptance criterion ("sized to the reader window"); it is not tuned to the
+    harness's 12,000-character sub-call hint.
+- **Shared settings.** Both arms use preset sampling (the built-in `pluto` profile, as the
+  harness v0.1 rows did), not native sampling.
+
+**What else changed in the code.** #113 touches `config.py`, `prompts.py` and `rlm.py`. Every
+change is gated on the new prompt version, or on `max_subcalls_per_run == 0`, which no earlier arm
+used. `tests/test_frozen_arms.py` pins sha256 digests of the existing arms' prompts, nudges,
+request sequences and recorded rows (rlm v0.1, rlm v0.2, plain at small/medium/large). The digests
+were generated from e8f2959 before either PR changed any source, and they pass on db6e9e4.
+
+**What runs.** Seeds 4–9, small, medium and large, all 8 tasks: 144 rows per arm, into
+`runs/exp-v02/repl-only.json` and `runs/exp-v02/mapreduce.json`.
+- The runs use a separate checkout pinned at the launch commit, recorded per batch.
+- They start on pluto after the native-sampling grid (1g) finishes, so no two runs share the
+  engine at the same time.
+- The stack is checked against `paper/provenance.md` before launch.
+- Error rows are quarantined and re-run, as for H1.
+
+**Comparison, fixed now** (1b; all secondary).
+- **H7:** REPL-only vs harness v0.1 (`runs/exp-v02/h-v01-32k.json`, seeds 4–9) on the same
+  (task, seed) pairs, per size.
+- **H6:** map-reduce vs harness v0.1, per size.
+- Both rows of every pair are graded with the active scorer set first.
+- Each comparison reports:
+  - the exact-rate difference with a task-clustered paired bootstrap 95% CI;
+  - two-sided exact McNemar, labelled secondary;
+  - leave-one-task-out;
+  - the minimum detectable effect at 48 pairs.
+
+  A null result is reported as "not detected".
+- **Also reported, as estimates only:**
+  - map-reduce vs plain-128K at small and medium;
+  - REPL-only vs plain-128K at small and medium;
+  - REPL-only SHODAN at small, beside the #108 diagnosis.
+- **Time caveat.** The harness v0.1 comparison rows were made 2026-10-09 to 2026-10-12 on the
+  same engine. The baselines are made later, so the time gap is reported.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
