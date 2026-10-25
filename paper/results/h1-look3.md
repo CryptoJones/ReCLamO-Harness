@@ -101,66 +101,66 @@ Position = the third of the context holding the answer's last literal mention; '
 
 | set | kind | n | A exact | B exact | b | c | z | exact p | crossed |
 |---|---|---|---|---|---|---|---|---|---|
-| primary: every pair counts | primary | 216 | 121 | 109 | 22 | 10 | +2.121 | 0.0501 | yes |
-| secondary: plain does_not_fit pairs dropped | secondary | 189 | 118 | 109 | 19 | 10 | +1.671 | 0.1360 | no |
-| sensitivity: plain length rows dropped | sensitivity | 187 | 120 | 109 | 21 | 10 | +1.976 | 0.0708 | no |
-| sensitivity: harness turn-cap/timeout rows dropped | sensitivity | 140 | 108 | 95 | 20 | 7 | +2.502 | 0.0192 | yes |
-| sensitivity: both arms finished | sensitivity | 137 | 106 | 95 | 18 | 7 | +2.200 | 0.0433 | yes |
+| primary: every pair counts | primary | 320 | 177 | 162 | 31 | 16 | +2.188 | 0.0400 | yes |
+| secondary: plain does_not_fit pairs dropped | secondary | 280 | 173 | 162 | 27 | 16 | +1.677 | 0.1263 | no |
+| sensitivity: plain length rows dropped | sensitivity | 276 | 174 | 162 | 28 | 16 | +1.809 | 0.0961 | no |
+| sensitivity: harness turn-cap/timeout rows dropped | sensitivity | 202 | 156 | 138 | 28 | 10 | +2.920 | 0.0051 | yes |
+| sensitivity: both arms finished | sensitivity | 197 | 152 | 138 | 24 | 10 | +2.401 | 0.0243 | yes |
 
 ### Task-clustered paired bootstrap (primary set)
 
-- exact-rate difference A-B: +0.056, 95% CI [-0.037, 0.162] (8 task clusters, 10000 resamples)
-- mean-score difference A-B: +0.064, 95% CI [-0.035, 0.174]
+- exact-rate difference A-B: +0.047, 95% CI [-0.047, 0.163] (8 task clusters, 10000 resamples)
+- mean-score difference A-B: +0.057, 95% CI [-0.042, 0.177]
 
 ### GLMM: logit(exact) ~ arm + (1 | task)
 
-- arm (harness vs plain): beta +0.619, SE 0.326, Wald z +1.90, p 0.0575, odds ratio 1.86; task SD 5.51; 432 answers in 8 tasks
+- arm (harness vs plain): beta +0.543, SE 0.272, Wald z +1.99, p 0.0462, odds ratio 1.72; task SD 3.17; 640 answers in 8 tasks
 
 ### Leave-one-task-out (primary)
 
 | dropped | n | A exact | B exact | b | c | z | exact p | diff |
 |---|---|---|---|---|---|---|---|---|
-| Cerebex | 189 | 101 | 85 | 21 | 5 | +3.138 | 0.0025 | +0.085 |
-| GLaDOS | 189 | 118 | 109 | 19 | 10 | +1.671 | 0.1360 | +0.048 |
-| MasterControl | 189 | 94 | 82 | 22 | 10 | +2.121 | 0.0501 | +0.063 |
-| Multivac | 189 | 100 | 90 | 17 | 7 | +2.041 | 0.0639 | +0.053 |
-| Neuromancer | 189 | 99 | 96 | 11 | 8 | +0.688 | 0.6476 | +0.016 |
-| SELMA | 189 | 94 | 84 | 20 | 10 | +1.826 | 0.0987 | +0.053 |
-| SHODAN | 189 | 121 | 109 | 22 | 10 | +2.121 | 0.0501 | +0.063 |
-| TheDixieFlatline | 189 | 120 | 108 | 22 | 10 | +2.121 | 0.0501 | +0.063 |
+| Cerebex | 280 | 148 | 127 | 30 | 9 | +3.363 | 0.0011 | +0.075 |
+| GLaDOS | 280 | 173 | 162 | 27 | 16 | +1.677 | 0.1263 | +0.039 |
+| MasterControl | 280 | 137 | 122 | 31 | 16 | +2.188 | 0.0400 | +0.054 |
+| Multivac | 280 | 145 | 130 | 26 | 11 | +2.466 | 0.0201 | +0.054 |
+| Neuromancer | 280 | 145 | 145 | 13 | 13 | +0.000 | 1.0000 | +0.000 |
+| SELMA | 280 | 138 | 125 | 28 | 15 | +1.982 | 0.0660 | +0.046 |
+| SHODAN | 280 | 177 | 162 | 31 | 16 | +2.188 | 0.0400 | +0.054 |
+| TheDixieFlatline | 280 | 176 | 161 | 31 | 16 | +2.188 | 0.0400 | +0.054 |
 
-### Minimum detectable effect (80% power, observed discordance 0.148)
+### Minimum detectable effect (80% power, observed discordance 0.147)
 
-- look 1 (112 pairs): 0.157 in exact-rate difference
+- look 1 (112 pairs): 0.156 in exact-rate difference
 - look 2 (216 pairs): 0.086 in exact-rate difference
 - look 3 (320 pairs): 0.061 in exact-rate difference
-- at the observed n with this look's boundary: 0.075
+- at the observed n with this look's boundary: 0.061
 
 ### Per task
 
 | group | n | A exact | B exact | b | c | z | exact p |
 |---|---|---|---|---|---|---|---|
-| Cerebex | 27 | 20 | 24 | 1 | 5 | -1.633 | 0.2188 |
-| GLaDOS | 27 | 3 | 0 | 3 | 0 | +1.732 | 0.2500 |
-| MasterControl | 27 | 27 | 27 | 0 | 0 | +0.000 | 1.0000 |
-| Multivac | 27 | 21 | 19 | 5 | 3 | +0.707 | 0.7266 |
-| Neuromancer | 27 | 22 | 13 | 11 | 2 | +2.496 | 0.0225 |
-| SELMA | 27 | 27 | 25 | 2 | 0 | +1.414 | 0.5000 |
-| SHODAN | 27 | 0 | 0 | 0 | 0 | +0.000 | 1.0000 |
-| TheDixieFlatline | 27 | 1 | 1 | 0 | 0 | +0.000 | 1.0000 |
+| Cerebex | 40 | 29 | 35 | 1 | 7 | -2.121 | 0.0703 |
+| GLaDOS | 40 | 4 | 0 | 4 | 0 | +2.000 | 0.1250 |
+| MasterControl | 40 | 40 | 40 | 0 | 0 | +0.000 | 1.0000 |
+| Multivac | 40 | 32 | 32 | 5 | 5 | +0.000 | 1.0000 |
+| Neuromancer | 40 | 32 | 17 | 18 | 3 | +3.273 | 0.0015 |
+| SELMA | 40 | 39 | 37 | 3 | 1 | +1.000 | 0.6250 |
+| SHODAN | 40 | 0 | 0 | 0 | 0 | +0.000 | 1.0000 |
+| TheDixieFlatline | 40 | 1 | 1 | 0 | 0 | +0.000 | 1.0000 |
 
 ### Per generator author
 
 | group | n | A exact | B exact | b | c | z | exact p |
 |---|---|---|---|---|---|---|---|
-| deepseek / deepseek-v4-flash | 27 | 22 | 13 | 11 | 2 | +2.496 | 0.0225 |
-| google / gemini-3.1-pro-high | 27 | 1 | 1 | 0 | 0 | +0.000 | 1.0000 |
-| mistral / mistral-medium-3.1 | 27 | 27 | 27 | 0 | 0 | +0.000 | 1.0000 |
-| nousresearch / hermes-4-405b | 27 | 21 | 19 | 5 | 3 | +0.707 | 0.7266 |
-| nvidia / nemotron-3-super-120b-a12b:free | 27 | 27 | 25 | 2 | 0 | +1.414 | 0.5000 |
-| openai / gpt-6-astra | 27 | 0 | 0 | 0 | 0 | +0.000 | 1.0000 |
-| xai / grok-4.6 | 27 | 3 | 0 | 3 | 0 | +1.732 | 0.2500 |
-| z-ai / glm-5.3-flash | 27 | 20 | 24 | 1 | 5 | -1.633 | 0.2188 |
+| deepseek / deepseek-v4-flash | 40 | 32 | 17 | 18 | 3 | +3.273 | 0.0015 |
+| google / gemini-3.1-pro-high | 40 | 1 | 1 | 0 | 0 | +0.000 | 1.0000 |
+| mistral / mistral-medium-3.1 | 40 | 40 | 40 | 0 | 0 | +0.000 | 1.0000 |
+| nousresearch / hermes-4-405b | 40 | 32 | 32 | 5 | 5 | +0.000 | 1.0000 |
+| nvidia / nemotron-3-super-120b-a12b:free | 40 | 39 | 37 | 3 | 1 | +1.000 | 0.6250 |
+| openai / gpt-6-astra | 40 | 0 | 0 | 0 | 0 | +0.000 | 1.0000 |
+| xai / grok-4.6 | 40 | 4 | 0 | 4 | 0 | +2.000 | 0.1250 |
+| z-ai / glm-5.3-flash | 40 | 29 | 35 | 1 | 7 | -2.121 | 0.0703 |
 
 ### Per evidence position
 
@@ -168,27 +168,27 @@ Position = the third of the context holding the answer's last literal mention; '
 
 | group | n | A exact | B exact | b | c | z | exact p |
 |---|---|---|---|---|---|---|---|
-| computed | 81 | 42 | 37 | 12 | 7 | +1.147 | 0.3593 |
-| first third | 52 | 49 | 46 | 3 | 0 | +1.732 | 0.2500 |
-| last third | 72 | 29 | 26 | 6 | 3 | +1.000 | 0.5078 |
-| middle third | 11 | 1 | 0 | 1 | 0 | +1.000 | 1.0000 |
+| computed | 120 | 61 | 52 | 19 | 10 | +1.671 | 0.1360 |
+| first third | 76 | 71 | 68 | 4 | 1 | +1.342 | 0.3750 |
+| last third | 109 | 44 | 42 | 7 | 5 | +0.577 | 0.7744 |
+| middle third | 15 | 1 | 0 | 1 | 0 | +1.000 | 1.0000 |
 
 ### Completion, cost and latency
 
 | arm | n | finished | completion | s p50 | s p95 | prompt tok | completion tok | sub-calls | turns |
 |---|---|---|---|---|---|---|---|---|---|
-| harness | 216 | 140 | 0.65 | 370 | 1528 | 79829 | 6296 | 0.46 | 14.62 |
-| plain | 216 | 160 | 0.74 | 568 | 1362 | 79913 | 5581 | 0.00 | 1.00 |
+| harness | 320 | 202 | 0.63 | 421 | 1532 | 79788 | 6201 | 0.55 | 14.62 |
+| plain | 320 | 236 | 0.74 | 580 | 1385 | 79905 | 5617 | 0.00 | 1.00 |
 
 ### Failure taxonomy
 
 | category | harness | plain |
 |---|---|---|
-| answered | 140 | 160 |
-| forced finish: time limit | 1 | 0 |
-| forced finish: turn cap | 75 | 0 |
-| not_run: does_not_fit | 0 | 27 |
-| output-length cap | 0 | 29 |
+| answered | 202 | 236 |
+| forced finish: time limit | 7 | 0 |
+| forced finish: turn cap | 111 | 0 |
+| not_run: does_not_fit | 0 | 40 |
+| output-length cap | 0 | 44 |
 
 ## A/A noise floor: plain-32K vs plain-128K at small
 
