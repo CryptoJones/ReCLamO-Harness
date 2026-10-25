@@ -838,10 +838,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--prompt-version",
-        choices=("v0.1", "v0.2"),
+        choices=("v0.1", "v0.2", "v0.1-repl-only"),
         default=None,
         help="reclamo root prompt version (default: the profile's, v0.2); v0.1 reproduces "
-        "the published results",
+        "the published results; v0.1-repl-only is v0.1 with sub-calls removed and disabled "
+        "(the REPL-only ablation, issue #83)",
     )
     parser.add_argument("--dry-run", action="store_true", help="print the plan; call no model")
     return parser

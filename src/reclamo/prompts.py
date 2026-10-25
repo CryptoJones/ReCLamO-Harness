@@ -29,6 +29,12 @@ paper's main prompt and upstream's current one on delegation:
   paper's book example) and a map-then-aggregate example.
 * It advertises a per-call size derived from the sub model's window
   (``RLMConfig.effective_subcall_chars``), not a fixed 12K.
+
+``"v0.1-repl-only"`` (issue #83, the REPL-only ablation) is the v0.1 fence prompt for
+the same settings with exactly the pieces ``repl_only_removals`` lists cut out (every
+one mentions a sub-call) and nothing added. The run allows no sub-calls
+(``max_subcalls_per_run = 0``); a call made anyway fails inside the model's code with a
+"disabled in this run" error and the run goes on.
 """
 
 from __future__ import annotations
@@ -38,7 +44,9 @@ from dataclasses import dataclass
 from typing import Any
 
 _MAX_CHUNKS_SHOWN = 10
-PROMPT_VERSIONS = ("v0.1", "v0.2")
+# "v0.1-repl-only" (issue #83): the v0.1 prompt with every sub-call mention removed.
+REPL_ONLY_VERSION = "v0.1-repl-only"
+PROMPT_VERSIONS = ("v0.1", "v0.2", REPL_ONLY_VERSION)
 DEFAULT_SUBCALL_CHARS = 12_000  # v0.1's fixed per-call size hint
 
 
@@ -376,6 +384,9 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
     concurrency = int(getattr(settings, "concurrency", 1))
     version = prompt_version_of(settings)
     recursive = max_depth > 1
+    repl_only = version == REPL_ONLY_VERSION
+    if repl_only:
+        version = "v0.1"
 
     intro = (
         "You answer a question about data that is far too large to read at once. The "
@@ -409,7 +420,45 @@ def build_system_prompt(settings: PromptSettings | object, context_meta: Context
             _examples_section_v02(subcall_chars, recursive),
             _rules_section(),
         ]
-    return "\n\n".join(parts) + "\n"
+    text = "\n\n".join(parts) + "\n"
+    if repl_only:
+        text = _strip_subcalls(text, subcall_chars, recursive, concurrency)
+    return text
+
+
+def repl_only_removals(
+    subcall_chars: int, recursive: bool = False, concurrency: int = 1
+) -> list[str]:
+    """The exact pieces of the v0.1 fence prompt that ``v0.1-repl-only`` removes
+    (issue #83), in prompt order. Each mentions a sub-call; nothing else is removed
+    and nothing is added:
+
+    1. the intro's "Inside the REPL you can ask a separate language model ..." line;
+    2. the ``llm_query``, ``llm_query_batched`` (and, at depth > 1, ``rlm_query``)
+       bullets of "Tools inside the REPL";
+    3. the whole "IMPORTANT: sub-calls are expensive" section;
+    4. the whole "Two ways to decompose" section (every example calls
+       ``llm_query_batched``).
+    """
+    bullets = [
+        "\n" + line
+        for line in _tools_section(subcall_chars, recursive).split("\n")
+        if line.startswith(("- `llm_query", "- `rlm_query"))
+    ]
+    return [
+        " " + _ask_line("v0.1"),
+        *bullets,
+        "\n\n" + _batching_section(subcall_chars, concurrency),
+        "\n\n" + _examples_section(subcall_chars, recursive),
+    ]
+
+
+def _strip_subcalls(text: str, subcall_chars: int, recursive: bool, concurrency: int) -> str:
+    for piece in repl_only_removals(subcall_chars, recursive, concurrency):
+        if text.count(piece) != 1:  # the v0.1 text drifted; refuse to guess
+            raise ValueError(f"v0.1-repl-only: expected one copy of {piece[:60]!r}")
+        text = text.replace(piece, "", 1)
+    return text
 
 
 def _ask_line(version: str) -> str:
@@ -458,7 +507,7 @@ def turn_prompt(i: int, n: int, first: bool = False, protocol: str = "fence") ->
 def decompose_nudge(version: str = "v0.1", context_chars: int = 0, subcall_chars: int = 0) -> str:
     """Sent when one sub-call got nearly the whole context and the context is larger
     than one call can read (the loop never sends it when the context fits)."""
-    if version == "v0.1":
+    if version in ("v0.1", REPL_ONLY_VERSION):
         return (
             "Your last code handed nearly the whole context to a single sub-call. That "
             "defeats the purpose: the sub-model has the same limits you do. Split the "
@@ -674,6 +723,8 @@ def build_tools_system_prompt(settings: PromptSettings | object, context_meta: C
     concurrency = int(getattr(settings, "concurrency", 1))
     version = prompt_version_of(settings)
     recursive = max_depth > 1
+    if version == REPL_ONLY_VERSION:
+        raise ValueError(f"{REPL_ONLY_VERSION} is defined for the fence protocol only")
 
     intro = (
         "You answer a question about data that is far too large to read at once. The "
@@ -724,6 +775,7 @@ __all__ = [
     "tool_specs",
     "final_rejection",
     "forced_final_prompt",
+    "repl_only_removals",
     "reverify_nudge",
     "subcall_chars_of",
     "turn_prompt",
