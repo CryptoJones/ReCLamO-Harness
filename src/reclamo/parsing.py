@@ -20,7 +20,9 @@ Other models' quirks:
   It can also write several such blocks in one reply with *invented* REPL output
   between them, so when a reply's first code is a ``<tool_call>`` only that block
   counts and everything after it is discarded. ``<tool_call>FINAL(...)`` is read
-  as ``FINAL(...)``.
+  as ``FINAL(...)``. It may also wrap the code inside the call in a ```` ```repl ```` or
+  ```` ```python ```` fence, or end it with a stray ```` ``` ```` or ``\\endrepl`` line
+  (issue #116); that markup is dropped.
 """
 
 from __future__ import annotations
@@ -69,6 +71,13 @@ _TOOL_CALL_TAIL = re.compile(
 # <tool_call>FINAL(...) / <tool_call>FINAL_VAR(...): read as a line-start FINAL.
 _TOOL_CALL_FINAL = re.compile(r"<tool_call>(?=[ \t]*FINAL(?:_VAR)?\s*\()")
 _TOOL_CALL_LEFTOVER = re.compile(r"<tool_call>.*?(?:</tool_call>|\Z)", re.DOTALL)
+# Laguna sometimes wraps the code inside a <tool_call> in markup that is not code (#116):
+# a ```repl / ```python fence around it (then the code ends at the fence's close, and
+# anything after is prose or invented output), or a stray closing ``` or \endrepl line
+# at the end. Without this, the markup is line 1 or the last line of a SyntaxError.
+_TOOL_CALL_FENCE_OPEN = re.compile(r"\A\s*```[ \t]*(?:repl|python|py)?[ \t]*\r?\n")
+_TOOL_CALL_FENCE_CLOSE = re.compile(r"^[ \t]*```[ \t]*$", re.MULTILINE)
+_TOOL_CALL_TRAILING_MARK = re.compile(r"(?:\r?\n[ \t]*(?:```|\\end[A-Za-z_{}]*)[ \t]*)+\s*\Z")
 _STRAY_THINK_CLOSE = re.compile(r"</think>")
 
 _PLAN_OPENERS = (
@@ -143,7 +152,18 @@ def _tool_call_block(text: str, m: re.Match[str]) -> _Block:
     if tail:
         stop = tail.end()
     code = _TOOL_CALL_ARG_PREFIX.sub("", text[body_start:body_end]).rstrip()
+    code = _unwrap_tool_call_code(code)
     return _Block(m.start(), stop, code, tool_call=True)
+
+
+def _unwrap_tool_call_code(code: str) -> str:
+    """Drop fence and end-marker lines around a ``<tool_call>``'s code (#116)."""
+    opened = _TOOL_CALL_FENCE_OPEN.match(code)
+    if opened:
+        body = code[opened.end() :]
+        close = _TOOL_CALL_FENCE_CLOSE.search(body)
+        return (body[: close.start()] if close else body).rstrip()
+    return _TOOL_CALL_TRAILING_MARK.sub("", code).rstrip()
 
 
 def _scan(text: str) -> tuple[str, list[_Block]]:
