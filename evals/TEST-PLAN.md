@@ -687,6 +687,58 @@ were generated from e8f2959 before either PR changed any source, and they pass o
 - **Time caveat.** The harness v0.1 comparison rows were made 2026-10-09 to 2026-10-12 on the
   same engine. The baselines are made later, so the time gap is reported.
 
+## 1i. H1 on a second model: Laguna S 2.1 (#116), recorded 2026-10-29 before any confirmatory row
+
+**Why.** H1 on Flash-Next came out task-dependent (1e, 1f). Running the same comparison on a
+second, weaker model tests whether that pattern belongs to one model. CJ, 2026-10-29: "do it".
+The model is Poolside's hosted Laguna S 2.1 (`poolside/laguna-s-2.1`), at $0, off pluto.
+
+**The arms** are H1's, with the model swapped.
+- **Harness:** `--profile laguna-32k --prompt-version v0.1 --modes rlm`. The limits are those
+  of the H1 harness rows (read from their trajectories): 20 turns, 1,800 s per run,
+  2,000-character output truncation, root 4,096 / sub 2,048 tokens, 300 s per request.
+- **Plain:** `--profile laguna-128k --prompt-version v0.2 --modes plain`, one attempt, as in H1.
+- **Profiles:** `runs/exp-laguna/profiles.toml`, versioned with this entry.
+  - Windows of 32K and 128K, as on pluto.
+  - Root thinking on (`reasoning_effort = "medium"`), sub-calls thinking off.
+  - Temperatures root 0.6 and sub 0.7.
+  - Poolside accepts temperature only, so the other pluto sampling fields are dropped. That is a
+    stated difference from H1.
+  - Laguna decides per request how much to reason; that is the model's behaviour and is not
+    controlled.
+
+**What runs.**
+- All 8 tasks, small and medium, seeds 4–43: 320 rows per arm per size, 1,280 rows in all.
+- Output goes to `runs/exp-laguna/{h-v01-32k,plain-131k}.json`, the file names
+  `paper/analysis/h1_analysis.py` reads.
+- The run uses a checkout pinned at the launch commit, recorded in
+  `runs/exp-laguna/commit.txt`. Rows are graded with the active scorer set (round 4, Cerebex
+  round 5).
+- **Provider errors** (HTTP 429, 5xx, timeouts reported as errors) are never scored. They are
+  quarantined to a side file and re-run, as for H1. A watchdog stops the run after 3 errors in a
+  row. If Poolside's quota ends the run before 320 pairs, the shortfall is reported as it is,
+  with no substitute rows.
+- A smoke test on seed 1 (MasterControl, small, one row per arm) checked the profiles. Seed 1 is
+  not confirmatory, and its rows are not analysed.
+- The 2026-10-08 pilot (seeds 2–3, older code a30aea5) stays exploratory.
+
+**Analysis, fixed now.** One look, after all rows are in. No interim looks.
+- **Primary, per size:** two-sided exact McNemar on the (task, seed) pairs, harness vs plain,
+  every pair counting and a missing answer counting as wrong. Significance at p < .05; each size
+  is its own question, with Holm across the two reported as a sensitivity check (as in 1f).
+- **Reported beside it,** from `paper/analysis/h1_analysis.py --runs runs/exp-laguna --seeds 4-43`:
+  - the task-clustered bootstrap CI;
+  - the GLMM;
+  - leave-one-task-out;
+  - the decision-9 exclusion sets (plain `does_not_fit`; turn cap / timeout; both finished);
+  - completion and the failure taxonomy.
+
+  The script's z and O'Brien–Fleming column do not apply to this single look and are ignored.
+- **Comparison with Flash-Next (descriptive only).** Per task, does the direction match H1?
+  The SHODAN-small and Neuromancer-medium effects are named in advance as the ones to check.
+  No test across models.
+- A null result is reported as "not detected", with the minimum detectable effect.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
