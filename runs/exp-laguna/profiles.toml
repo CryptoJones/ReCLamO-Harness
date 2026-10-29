@@ -1,0 +1,42 @@
+# Laguna S 2.1 on Poolside's hosted API, for the H1 repeat on a second model
+# (issue #116, TEST-PLAN 1i). Mirrors the built-in pluto (32K) and pluto-long (128K)
+# profiles: same windows, thinking on for the root and off for sub-calls, same
+# temperatures. Poolside accepts temperature only, so top_p / top_k / min_p /
+# presence_penalty are left out. max_tokens is left to the prompt-version default,
+# as on pluto.
+
+[profiles.laguna-32k]
+base_url = "https://inference.poolside.ai/v1"
+api_key_cmd = "pass show poolside/apikey"
+concurrency = 4
+context_tokens = 32768
+
+[profiles.laguna-32k.root]
+model = "poolside/laguna-s-2.1"
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 0.6 }
+
+[profiles.laguna-32k.sub]
+model = "poolside/laguna-s-2.1"
+enable_thinking = false
+sampling = { temperature = 0.7 }
+
+[profiles.laguna-128k]
+base_url = "https://inference.poolside.ai/v1"
+api_key_cmd = "pass show poolside/apikey"
+concurrency = 4
+context_tokens = 131072
+
+[profiles.laguna-128k.root]
+model = "poolside/laguna-s-2.1"
+enable_thinking = true
+reasoning_effort = "medium"
+sampling = { temperature = 0.6 }
+timeout = 1800.0
+
+[profiles.laguna-128k.sub]
+model = "poolside/laguna-s-2.1"
+enable_thinking = false
+sampling = { temperature = 0.7 }
+timeout = 1800.0
