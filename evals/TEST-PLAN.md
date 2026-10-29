@@ -739,6 +739,23 @@ The model is Poolside's hosted Laguna S 2.1 (`poolside/laguna-s-2.1`), at $0, of
   No test across models.
 - A null result is reported as "not detected", with the minimum detectable effect.
 
+**1i-i. First launch discarded; parser fix (2026-10-29 19:00 CDT, before any analysis).**
+The 18:29 launch (ed5d4c7) was stopped at about 18:35. Every harness row ended in `error_limit`:
+Laguna wrote correct code inside a `<tool_call>` but wrapped it in a ```` ```repl ```` fence,
+or ended it with a stray ```` ``` ```` or `\endrepl` line. The harness ran that markup as Python,
+so every turn was a SyntaxError (19 of the first 75 code blocks). Those rows measure the
+parser, not the model.
+- **Fix:** `parsing.py` drops that markup inside a `<tool_call>` only (#116).
+- **Effect on Flash-Next: none.** Re-parsing all 16,936 recorded turns under `runs/` (H1, the
+  native grid, the replay set and the pilots) gives identical code blocks, finals and prose.
+- **Effect on Laguna:** on the 75 blocks from the first launch, 73 now compile. The other 2 are
+  code cut off at the output cap, which is the model's own failure and is left alone.
+- **The first launch's rows (both arms) are discarded**, kept unanalysed in
+  `runs/exp-laguna/aborted-20261029/`. The run restarts from scratch at the fix commit.
+- Plain rows don't use the parser, but they are discarded too, so both arms come from one
+  commit. A few plain scores were seen while the failure was being diagnosed; no harness-vs-plain
+  comparison was computed.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:

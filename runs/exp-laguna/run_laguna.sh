@@ -5,6 +5,7 @@
 # Error rows are moved to a side file and re-run (up to 3 passes); then lanes merge into
 # runs/exp-laguna/{h-v01-32k,plain-131k}.json for paper/analysis/h1_analysis.py.
 set -u
+export PYTHONUNBUFFERED=1   # rows show in run.log as they finish
 cd ~/source/repos/ReCLamO-Harness-laguna
 D=runs/exp-laguna; L=$D/lanes; mkdir -p $L $D/traj $D/quarantine
 P="--profiles $D/profiles.toml"
@@ -16,7 +17,7 @@ lane() {  # arm-name profile prompt mode seeds idx
   local res=""; [ -f $f ] && res="--resume $f" || res="--out $f"
   uv run python evals/independent/run_eval.py $P --profile $2 --prompt-version $3 --modes $4 \
     --sizes small,medium --seed-list $5 $res --log-dir $D/traj 2>&1 \
-    | grep --line-buffered -E -- "->|\] |rror" | sed -u "s/^/[$1 L$6] /" \
+    | grep --line-buffered -E -- "->|\] |rror|Traceback|unknown|usage:" | sed -u "s/^/[$1 L$6] /" \
     | awk -v pat="$1-L$6" -v f="$f" '{print; fflush()} /-> .*(error|Error)/{e++} /-> score/ && !/error/{e=0}
         e>=3{print "WATCHDOG: 3 consecutive errors in " pat "; lane stopped"; fflush(); system("pkill -f \"" f "\""); exit 1}'
 }

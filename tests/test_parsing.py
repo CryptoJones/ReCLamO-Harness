@@ -356,3 +356,59 @@ def test_unclosed_tool_call_runs_to_end_of_text() -> None:
 def test_strict_mode_excludes_tool_calls() -> None:
     text = "<tool_call>repl\nx = 1\n</tool_call>\n```python\ny = 2\n```\n```repl\nz = 3\n```\n"
     assert find_code_blocks(text, strict=True) == ["z = 3"]
+
+
+# Issue #116: Laguna wraps the code inside a <tool_call> in a fence. Samples from the
+# 2026-10-29 run (trajectories 20261029T232916Z-31cd34 and 20261029T232930Z-443b7d).
+FENCED_INSPECT = "print(type(context))\nprint(len(context))\nprint(context[:2000])"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"<tool_call>repl\n```repl\n{FENCED_INSPECT}\n```\n</repl></tool_call>",
+        f"<tool_call>repl\n```repl\n{FENCED_INSPECT}\n```\n</repl>",
+        f"<tool_call>repl\n```python\n{FENCED_INSPECT}\n```\n</repl></tool_call>",
+        f"I'll start by inspecting it.<tool_call>repl\n```repl\n{FENCED_INSPECT}\n```\n</repl>",
+        f"<tool_call>python\n```\n{FENCED_INSPECT}\n```\n</tool_call>",
+        f"<tool_call>repl\n```repl\n{FENCED_INSPECT}\n</tool_call>",
+    ],
+    ids=[
+        "repl-fence",
+        "no-tool_call-close",
+        "python-fence",
+        "prose-first",
+        "bare-fence",
+        "unclosed",
+    ],
+)
+def test_fence_inside_tool_call_is_unwrapped(text: str) -> None:
+    assert find_code_blocks(text) == [FENCED_INSPECT]
+
+
+def test_fence_inside_tool_call_still_discards_invented_output() -> None:
+    text = (
+        f"<tool_call>repl\n```repl\n{FENCED_INSPECT}\n```\n</repl></tool_call>"
+        "```repl\n<class 'str'>\n61175\n```\n<tool_call>repl\nprint(1)\n</tool_call>"
+    )
+    assert find_code_blocks(text) == [FENCED_INSPECT]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        f"<tool_call>repl\n{FENCED_INSPECT}\n```",
+        f"<tool_call>repl\n{FENCED_INSPECT}\n\\endrepl",
+        f"<tool_call>repl\n{FENCED_INSPECT}\n```\n```\n</tool_call>",
+        f"Hi.<tool_call>repl\n```python\n{FENCED_INSPECT}\n```\n```\n\nHmm, the format "
+        f"seems off.</think>Hi.<tool_call>repl\n```python\nprint(9)\n```",
+    ],
+    ids=["stray-close", "endrepl", "double-close", "fence-then-prose"],
+)
+def test_markup_around_tool_call_code_is_dropped(text: str) -> None:
+    assert find_code_blocks(text) == [FENCED_INSPECT]
+
+
+def test_unfenced_tool_call_code_is_unchanged() -> None:
+    code = "x = '```'\nprint(x)"
+    assert find_code_blocks(f"<tool_call>repl\n{code}\n</tool_call>") == [code]
