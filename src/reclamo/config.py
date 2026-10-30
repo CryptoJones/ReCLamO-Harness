@@ -39,7 +39,16 @@ PROTOCOLS = ("fence", "tools")
 # "reclamo" is our own prompt and turn format; "upstream-rlm-v0" reproduces the
 # alexzhang13/rlm v1.0.0 scaffold that mit-oasys/rlm-qwen3-8b-v0.1 was trained on
 # (issue #43, see upstream.py).
-PLANNER_STYLES = ("reclamo", "upstream-rlm-v0")
+# "upstream-rlm-gpt5" is the same scaffold with the paper's GPT-5 prompt (App. C.1 (1a))
+# in place of the 32K Qwen3-8B one, for the frontier replication (issue #120).
+PLANNER_STYLES = ("reclamo", "upstream-rlm-v0", "upstream-rlm-gpt5")
+UPSTREAM_STYLES = ("upstream-rlm-v0", "upstream-rlm-gpt5")
+# How a role's requests are shaped. "chat-template" (default) is vLLM / llama.cpp /
+# SGLang: thinking and reasoning_effort ride in chat_template_kwargs, the output cap
+# is max_tokens, non-standard sampling keys go in extra_body. "openai" is the OpenAI
+# API itself: reasoning_effort is a top-level field, the cap is max_completion_tokens,
+# and nothing goes in extra_body (the API rejects unknown fields).
+API_DIALECTS = ("chat-template", "openai")
 # The reclamo root prompt's version (issue #59): "v0.1" reproduces the published
 # results byte for byte, "v0.2" follows the paper's main prompt on delegation.
 # "v0.1-repl-only" (issue #83) is the REPL-only ablation: v0.1 with every sub-call
@@ -209,6 +218,14 @@ class ModelConfig:
     # This role's context window in tokens; None = the profile's context_tokens.
     # Only the sub role's is read today (the per-call size v0.2 advertises).
     context_tokens: int | None = None
+    # Request shape; see API_DIALECTS.
+    api_dialect: str = "chat-template"
+
+    def __post_init__(self) -> None:
+        if self.api_dialect not in API_DIALECTS:
+            raise ConfigError(
+                f"api_dialect must be one of {', '.join(API_DIALECTS)}, not {self.api_dialect!r}"
+            )
 
 
 @dataclass(frozen=True)

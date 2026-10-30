@@ -63,7 +63,7 @@ from typing import Any, Protocol
 import openai
 
 from reclamo.client import Completion, ToolCall, Usage
-from reclamo.config import RLMConfig, base_prompt_version
+from reclamo.config import UPSTREAM_STYLES, RLMConfig, base_prompt_version
 from reclamo.errors import RLMTimeout, RLMTokenLimit
 from reclamo.logger import TrajectoryLogger, VerbosePrinter
 from reclamo.parsing import (
@@ -419,10 +419,10 @@ class RLM:
         # rides in a per-turn user prompt that is sent but never stored, each executed
         # block gets its own "Code executed: ... REPL output: ..." user message, and
         # there is no "Turn i/N" line. Every guard below still applies.
-        upstream = cfg.planner_style == "upstream-rlm-v0"
+        upstream = cfg.planner_style in UPSTREAM_STYLES
         history: list[dict[str, Any]]
         if upstream:
-            history = upstream_initial_messages(self._context)
+            history = upstream_initial_messages(self._context, cfg.planner_style)
             kinds = ["system", "meta"]
         else:
             history = [
@@ -873,7 +873,7 @@ class RLM:
         """
         not_run = len(blocks) - len(results)
         note = f"[{not_run} later block(s) not run: {why}]" if not_run > 0 else ""
-        if self.cfg.planner_style == "upstream-rlm-v0" and self.cfg.protocol == "fence":
+        if self.cfg.planner_style in UPSTREAM_STYLES and self.cfg.protocol == "fence":
             for block, res in zip(blocks, results, strict=False):
                 pieces = _upstream_pieces(block, res, self.cfg.output_truncate_chars)
                 self._append_pieces(history, kinds, {"role": "user"}, pieces, "repl")
@@ -1237,7 +1237,7 @@ class RLM:
         state = forced_final_state(shown, self._last_output)
         if state:
             prompt = f"{state}\n\n{prompt}"
-        if self.cfg.planner_style == "upstream-rlm-v0":
+        if self.cfg.planner_style in UPSTREAM_STYLES:
             # That style never stores the query (it rides in the per-turn prompt).
             prompt = f'The original prompt: "{self._query}".\n\n{prompt}'
         tools = tool_specs(self.cfg.output_truncate_chars) if tools_mode else None

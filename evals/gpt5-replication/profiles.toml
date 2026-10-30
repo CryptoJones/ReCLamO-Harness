@@ -1,0 +1,62 @@
+# Frontier replication (issue #120, TEST-PLAN 1j): the paper's own pairing.
+# GPT-5 root (medium reasoning, default sampling) and GPT-5-mini sub-calls, as in
+# arXiv 2512.24601 §3.2. The key is read from OPENAI_API_KEY and never written anywhere.
+#
+# context_tokens 400,000 with a 128,000 output reserve leaves 272,000 input tokens:
+# GPT-5's input limit, the "272K" the paper quotes. The output caps are the API's
+# maxima, so nothing here truncates a reply the API would have allowed (the paper
+# used the defaults).
+#
+# Retries are raised for rate limits (429s): six tries, 5 s backoff doubling.
+
+[profiles.gpt5-rlm]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+concurrency = 4
+context_tokens = 400000
+planner_style = "upstream-rlm-gpt5"
+prompt_version = "v0.2"
+max_iterations = 30
+output_truncate_chars = 20000
+max_retries = 6
+retry_backoff = 5.0
+# Runaway guard per question: 4M tokens is ~$5 at GPT-5 prices, ~25x the expected run.
+max_tokens_total = 4000000
+
+[profiles.gpt5-rlm.root]
+model = "gpt-5"
+api_dialect = "openai"
+reasoning_effort = "medium"
+max_tokens = 128000
+timeout = 1800.0
+
+[profiles.gpt5-rlm.sub]
+model = "gpt-5-mini"
+api_dialect = "openai"
+reasoning_effort = "medium"
+max_tokens = 128000
+context_tokens = 400000
+timeout = 1800.0
+
+# The base-model arm: GPT-5 reads the whole document in one call (run_eval mode
+# "plain"). Same root model and settings; no planner, no sub-calls.
+[profiles.gpt5-plain]
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+concurrency = 4
+context_tokens = 400000
+max_retries = 6
+retry_backoff = 5.0
+
+[profiles.gpt5-plain.root]
+model = "gpt-5"
+api_dialect = "openai"
+reasoning_effort = "medium"
+max_tokens = 128000
+timeout = 1800.0
+
+[profiles.gpt5-plain.sub]
+model = "gpt-5-mini"
+api_dialect = "openai"
+reasoning_effort = "medium"
+max_tokens = 128000

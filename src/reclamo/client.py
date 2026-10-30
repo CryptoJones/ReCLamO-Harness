@@ -205,6 +205,8 @@ class LMClient:
         mc: ModelConfig = self.cfg.role(role)
         thinking = mc.enable_thinking if enable_thinking is None else enable_thinking
 
+        if mc.api_dialect == "openai":
+            return self._build_openai_request(mc, messages, max_tokens, tools, timeout)
         extra_body: dict[str, Any] = {}
         kwargs: dict[str, Any] = {
             "model": mc.model,
@@ -223,6 +225,42 @@ class LMClient:
             template_kwargs["reasoning_effort"] = mc.reasoning_effort
         extra_body["chat_template_kwargs"] = template_kwargs
         kwargs["extra_body"] = extra_body
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+        return kwargs
+
+    @staticmethod
+    def _build_openai_request(
+        mc: ModelConfig,
+        messages: Iterable[Message],
+        max_tokens: int | None,
+        tools: list[dict[str, Any]] | None,
+        timeout: float | None,
+    ) -> dict[str, Any]:
+        """``api_dialect = "openai"``: the request shape the OpenAI API accepts.
+
+        Reasoning models (GPT-5) take ``max_completion_tokens``, not ``max_tokens``,
+        and ``reasoning_effort`` as a top-level field. The API rejects unknown body
+        fields, so there is no ``chat_template_kwargs`` and no ``extra_body``, and a
+        non-standard sampling key is a config error rather than a silent 400.
+        ``enable_thinking`` does not apply: these models always reason.
+        """
+        kwargs: dict[str, Any] = {
+            "model": mc.model,
+            "messages": [dict(m) for m in messages],
+            "max_completion_tokens": max_tokens or mc.max_tokens,
+            "timeout": mc.timeout if timeout is None else timeout,
+        }
+        if mc.reasoning_effort:
+            kwargs["reasoning_effort"] = mc.reasoning_effort
+        for key, value in mc.sampling.items():
+            if key not in _STANDARD_SAMPLING:
+                raise ValueError(
+                    f"sampling key {key!r} is not accepted by the OpenAI API "
+                    f'(api_dialect = "openai"); allowed: {", ".join(sorted(_STANDARD_SAMPLING))}'
+                )
+            kwargs[key] = value
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"

@@ -756,6 +756,66 @@ parser, not the model.
   commit. A few plain scores were seen while the failure was being diagnosed; no harness-vs-plain
   comparison was computed.
 
+## 1j. Frontier replication: GPT-5 RLM with the paper's settings vs plain GPT-5 (#120), recorded 2026-10-29 before any GPT-5 row
+
+**Why.** H1 (1e, 1f) and its Laguna repeat (1i) ran harness v0.1, whose limits are tighter
+than the paper's: 2,000-character output against 20,000, 20 turns against 30, a 32K window,
+and a prompt that discourages sub-calls. They test a cautious variant, not the paper's claim.
+CJ, 2026-10-29: "lets test against a frontier model ... with analogous values to GPT-5".
+The Laguna run (1i) was stopped the same evening, before analysis, and is not reported as H1
+evidence. CJ has no GPT-5 budget (the $0 rule of 2026-10-10). So this entry is written to be
+run by a collaborator with API access, using the kit in `evals/gpt5-replication/`. An
+OpenAI Researcher Access application is pending.
+
+**The arms.** Profiles are in `evals/gpt5-replication/profiles.toml`, versioned with this
+entry. The kit's README has the full "same as the paper / different / why" table.
+- **rlm:** GPT-5 root (medium reasoning, default sampling) and GPT-5-mini sub-calls (paper
+  §3.2).
+  - Prompt: App. C.1 (1a) word for word, in the alexzhang13/rlm v1.0.0 message layout
+    (`planner_style = "upstream-rlm-gpt5"`).
+  - Limits: 30 turns, 20,000-character REPL output, 272K input tokens, depth 1.
+  - Runaway guards, which the paper does not have: 256 sub-calls per run, 1 h and 4M tokens
+    per question.
+- **plain:** GPT-5 with the same settings. The whole document goes in one call, with up to
+  128K output tokens. A document over 272K input tokens is `does_not_fit` and scores zero,
+  as in the paper's base-model rows.
+- **mapreduce, large only:** the fixed-chunk baseline (#84). GPT-5-mini readers work on
+  chunks sized to their window, and GPT-5 aggregates. It is added because no large document
+  fits plain GPT-5, so rlm vs plain at large is decided by construction.
+
+**What runs.**
+- All 8 tasks.
+- Seeds 4–43 at small and medium: 320 pairs per size per comparison.
+- Seeds 4–23 at large: 160 pairs per comparison.
+- The pilot (seeds 4–11, every size) is part of this sample, fixed now.
+- The decision to continue after the pilot uses pipeline checks only, never scores:
+  - under 5% error rows after reruns;
+  - no arm with over 25% `error_limit` stops;
+  - spend within 2× of estimate.
+- Provider errors are quarantined and re-run, as in H1. A spending cap or quota that ends the
+  run early is reported as it is, with no substitute rows.
+- Rows are graded with the active scorer set (round 4, Cerebex round 5). The run records its
+  commit in `runs/exp-gpt5/commit.txt`.
+
+**Analysis, fixed now.** One look, after the full run, with
+`evals/gpt5-replication/analyze.py`. The outcome is `exact`, and a missing answer counts as
+wrong.
+- **Primary, per size:** rlm vs plain, two-sided exact McNemar on (task, seed) pairs,
+  p < .05. Each size is its own question; Holm across the three is a sensitivity check.
+- **Secondary, large:** rlm vs mapreduce, the same test.
+- **Reported beside them:** the task-clustered bootstrap 95% CI of the accuracy difference
+  (10,000 reps), leave-one-task-out, per-task counts, and the rlm stop reasons.
+- **Predictions, stated so they can fail:**
+  - **G1 small:** rlm is not better than plain. The paper itself reports the base model
+    competitive on short inputs.
+  - **G2 medium:** no prediction of direction; the documents fit, but some exceed 100K tokens.
+  - **G3 large:** rlm beats mapreduce.
+  - **G4:** of rlm's misses, fewer than half end at the turn cap or the time limit (on
+    Flash-Next v0.1 the cap was the main failure).
+- **Comparison with H1 (descriptive only).** Per task, does each direction match Flash-Next?
+  SHODAN-small and Neuromancer-medium are named in advance.
+- A null result is reported as "not detected", with the minimum detectable effect.
+
 ## 2. Validity checks (run first; they can invalidate everything else)
 
 1. **The document is causally needed.** Each check runs on a subset per task:
