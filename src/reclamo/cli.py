@@ -89,7 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
         choices=PLANNER_STYLES,
         default=None,
         help="root prompt and turn format: ours (reclamo, the default) or the upstream "
-        "alexzhang13/rlm scaffold RLM-Qwen3-8B was trained on (upstream-rlm-v0)",
+        "alexzhang13/rlm scaffold RLM-Qwen3-8B was trained on (upstream-rlm-v0), or that "
+        "scaffold with the paper's GPT-5 prompt (upstream-rlm-gpt5)",
     )
     run.add_argument(
         "--prompt-version",
