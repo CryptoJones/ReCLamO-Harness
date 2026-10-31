@@ -63,8 +63,8 @@
 
 \newcommand{\code}[1]{\texttt{#1}}
 
-\title{\textbf{Recursive Language Models on Local Hardware:\\A Replication-and-Measurement Study}\\[0.5ex]
-\large\textcolor{red!70!black}{DRAFT --- results pending; not for citation}}
+\title{\textbf{Recursive Language Models on Local Hardware:\\A Transfer Study}\\[0.5ex]
+\large\textcolor{red!70!black}{DRAFT --- H1 concluded; H2--H7 pending; not for citation}}
 \author{Aaron Kingsley Clark\thanks{ORCID \href{https://orcid.org/0000-0002-6831-2663}{0000-0002-6831-2663}. Correspondence: \href{mailto:aaron.clark3@eastern.edu}{aaron.clark3@eastern.edu}.}}
 \affil{Applied Artificial Intelligence\\Eastern University, St.~Davids, PA, USA}
 \date{Draft of October 2026}
@@ -78,8 +78,9 @@ Recursive Language Models (RLMs) place a long input in a programming environment
 as a variable and let a language model inspect it with code and call itself on
 pieces of it, instead of reading the whole input in one prompt. The method was
 introduced and evaluated with frontier models. We ask whether it carries over to a
-locally served, quantized open-weight model on shared, serial hardware. We
-contribute (i) ReCLamO-Harness, an open-source, clean-room RLM harness built for
+locally served, quantized open-weight model on shared, serial hardware. This is a
+transfer study: one model, one serving stack, eight synthetic tasks, and the claims
+stop there. We contribute (i) ReCLamO-Harness, an open-source, clean-room RLM harness built for
 local serving, with per-role endpoints, hard sub-call caps, context compaction that
 guarantees every request fits the window, a forced finish on every limit, and a
 compatibility mode that runs the original authors' fine-tuned RLM-Qwen3-8B
@@ -93,7 +94,15 @@ pre-registered interim looks. A pilot on 16 questions per cell taught us that tw
 measurement errors, selecting the baseline's better attempt with the answer key and
 defective graders, moved results by as much as the effects under study; we report
 those lessons separately and draw no conclusions from the pilot.
-\TODO{Findings sentence, to be written after the main grid (Section~\ref{sec:results}) completes.}
+The primary comparison (H1) is concluded at both sizes on 320 confirmatory pairs
+each, after a scorer defect found mid-study was disclosed and corrected: at the small
+size the single-call baseline is more accurate (203 vs 229 exact, $z=-3.11$,
+$p=.0025$), at the medium size the harness is (177 vs 162, $z=+2.19$, $p=.040$), and
+each result rests on one or two tasks, so neither supports a general claim in either
+direction. The harness finished 71\% of small and 63\% of medium questions against the
+baseline's 100\% and 74\%, at roughly twice the wall-clock time at small size. The
+secondary hypotheses (configuration, delegation, beyond-window completion, sampling,
+and two non-recursive baselines) are pre-registered and pending.
 \end{abstract}
 
 \noindent\textbf{Keywords:} recursive language models; long-context reasoning;
@@ -119,8 +128,10 @@ answered by capable models. Many practitioners instead run a quantized open-weig
 model on hardware they own, one or two requests at a time. This paper asks a
 narrow, practical question: \emph{on such a setup, does an RLM harness answer
 long-context questions more accurately than simply giving the model the whole
-document, and at what cost?} It is a replication-and-measurement study, not a new
-method. The study is also a record of how easily such a comparison is mismeasured:
+document, and at what cost?} It is a transfer study, not a new method and not a
+replication: the claims are bounded to this model, this serving stack and these eight
+tasks, and only the LongBench Pro reproduction planned in Section~\ref{sec:future} would
+be called a replication. The study is also a record of how easily such a comparison is mismeasured:
 in a pilot, our own measurement errors moved the result as much as the method did.
 
 We make four contributions, and defer a fifth until the data are in.
@@ -151,9 +162,12 @@ We make four contributions, and defer a fifth until the data are in.
   bugs that cost one arm more than another, a prompt patch copied from the paper
   that suppressed the very behaviour it was meant to temper, and conditions under
   which the paper's 8B planner could not be fairly judged.
-\item \textbf{Main results} (Section~\ref{sec:results}): \PENDING{accuracy, completion,
-  cost and latency on up to 320 paired questions per primary comparison and size, and
-  the outcome of each pre-registered hypothesis.}
+\item \textbf{The primary result} (Section~\ref{sec:results}): H1 on 320 confirmatory
+  pairs per size, reported twice, as the pre-registered procedure recorded it under the
+  original scorers and as recomputed under corrected scorers after a one-directional
+  scorer defect was found, with the per-task table, leave-one-task-out estimates,
+  completion, cost and latency beside every number. The two sizes point in opposite
+  directions and each rests on one or two tasks. H2--H7 are pending.
 \end{enumerate}
 
 % ===========================================================================
@@ -465,10 +479,12 @@ $q \approx 0.30$. With $n \approx (z_{0.975} + z_{0.80})^2\, q / \delta^2$, dete
 10-point difference $\delta$ at $\alpha = 0.05$ and 80\% power needs about 240 pairs
 (about 320 with the interim looks below), and a 5-point difference about 940. A grid of
 64 per cell detects only differences of roughly 25 points or more. The plan therefore
-extends the grid in rolling batches toward 320 pairs (seeds 2--41) for the primary
-comparison at small and medium; the first stage, seeds 2--9 (64 per cell, plus 64
-large questions for the harness arms, which no plain arm can fit), is running.
-5-point effects are out of reach on this hardware.
+extended the grid in rolling batches to 320 pairs for the primary comparison at small
+and medium. Seeds 2--3 were seen before the hypotheses were frozen and are exploratory;
+the \emph{confirmatory} set is seeds 4--43 (8 tasks $\times$ 40 seeds = 320 pairs per
+size), with interim looks after seeds 17 (112 pairs) and 30 (216) and the final look at
+seed 43 (\code{evals/TEST-PLAN.md}, section 1b). The 64 large questions per harness arm
+(H4) have no plain comparator. 5-point effects are out of reach on this hardware.
 
 \paragraph{Pairing, clustering and replicates.} Every harness question is also answered
 by plain; plain-only seeds may estimate baseline accuracy but never count toward paired
@@ -508,8 +524,10 @@ freeze precedes looking at their results, though not their collection.
   pairs, using O'Brien--Fleming boundaries ($|z| > 3.471, 2.454, 2.004$; corrected 2026-10-10 before any look, see \code{evals/TEST-PLAN.md} section 1b). At 64 pairs
   (seeds 2--9) no look is reached, so that grid reports estimates with intervals and no
   test of H1.
-\item[H2 (secondary; v0.2 vs v0.1).] Harness v0.2 128K and Harness v0.1 differ in
-  exact-match accuracy at small and at medium size (two-sided McNemar).
+\item[H2 (secondary; configuration comparison).] Harness v0.2 128K and Harness v0.1
+  differ in exact-match accuracy at small and at medium size (two-sided McNemar,
+  unadjusted). The arms differ in prompt, limits and window together, so a difference
+  cannot be attributed to delegation.
 \item[H3 (secondary; delegation).] Harness v0.2 makes more sub-calls per question than v0.1
   (one-sided paired Wilcoxon signed-rank on sub-calls per question).
 \item[H4 (beyond the window).] At large size, where no plain arm fits, both
@@ -519,7 +537,24 @@ freeze precedes looking at their results, though not their collection.
   defaults differs from accuracy with the Qwen3 presets on the same questions (two-sided
   exact McNemar per arm). H5 also asks whether the directions of H1 and H2 hold under
   both settings. The two grids are never pooled.
+\item[H6 (secondary; map-reduce baseline).] Fixed-chunk map-reduce with the same model as
+  reader, deterministic prompts and one aggregation call differs from Harness v0.1 in
+  exact-match accuracy. At large size it is the harness's only comparator (added
+  2026-10-10, section 1b, before any row of either arm).
+\item[H7 (secondary; REPL-only).] Harness v0.1 with \code{llm\_query} disabled and not
+  advertised differs from Harness v0.1. A REPL-only score close to the harness's would
+  mean the gain comes from code in a REPL, not from recursion (added with H6).
 \end{description}
+
+H1-small and H1-medium are two separate primary questions, each tested at its own
+$\alpha = .05$; Holm-adjusted $p$-values across the pair are reported as a sensitivity
+check, and no claim combines them. H2--H7 are secondary, labelled so, and H4 is an
+estimate rather than a test. The analysis plan (section 1b) fixes, before the first look:
+a task-clustered paired bootstrap and a GLMM with a task random intercept beside
+McNemar; leave-one-task-out estimates and the minimum detectable effect at each $n$;
+per-task, per-author and evidence-position breakdowns; an A/A noise floor from the two
+plain arms on identical input; completion, cost and latency as central results; and a
+failure taxonomy.
 
 Ablations that attribute any H2 difference to the prompt, the turn cap or the REPL
 output limit are a separate, later phase (Section~\ref{sec:future}).
@@ -528,34 +563,182 @@ output limit are a separate, later phase (Section~\ref{sec:future}).
 \section{Results}
 \label{sec:results}
 
-\PENDING{This section is filled by \code{make\_tables.py --stage main} once the
-main grid reaches each pre-registered look: up to 320 paired questions for the primary
-comparison at small and medium, starting with seeds 2--9 (64 per cell), and 64 large
-questions per harness arm. No result below may be read as a finding until then.}
+This section reports H1, which is concluded at both sizes. The pre-registered procedure
+ran, stopped, was found to have been measuring a scorer artefact, and was recomputed
+under corrected scorers with the deviation disclosed; both records are given. H2--H7 are
+pre-registered and pending (Section~\ref{sec:pending}). Every number below is generated
+from the run files by \code{paper/analysis/h1\_analysis.py}; the markdown report it
+writes is \code{paper/results/h1-look3.md}, and \code{evals/TEST-PLAN.md} sections
+1c--1f are the dated record.
 
-\IfFileExists{tables/main_accuracy.tex}{\input{tables/main_accuracy.tex}}{%
-\pendingtable{Main grid: accuracy per arm and size, Wilson and bootstrap
-intervals.}{main\_accuracy.tex, generated by \code{make\_tables.py --stage main}}}
+\subsection{Protocol deviations}
+\label{sec:deviations}
 
-\IfFileExists{tables/main_paired.tex}{\input{tables/main_paired.tex}}{%
-\pendingtable{Main grid: paired McNemar tests for H1 and H2.}{main\_paired.tex}}
+Three deviations from the pre-registered plan occurred, all recorded in the test plan on
+the day they were found.
 
-\IfFileExists{tables/main_cost.tex}{\input{tables/main_cost.tex}}{%
-\pendingtable{Main grid: completion, delegation, tokens and latency.}{main\_cost.tex}}
+\paragraph{The seed-17 look was late.} The first interim look was due when seed 17
+finished (2026-10-15) and was not performed; the grid ran on to seed 30 before any look
+was computed (2026-10-16). Nobody read a score in between (only row counts and error
+rows), and the recorded result applies the pre-registered rule as written: H1-medium
+counted as stopped at the first look, H1-small at the second (section 1c).
 
-\paragraph{H1.} \PENDING{outcome of H1 at small and at medium, with $p$-values.}
+\paragraph{A one-directional scorer defect.} On 2026-10-19, while answering a
+multi-model review of the per-task table, we found that the frozen ``round 3'' scorers
+penalised answers that show their work: three or more dollar amounts anywhere in the
+text, a ``not'' or ``or'' near a second number, a name mentioned during the reasoning,
+a status history before the final status. The plain-128K arm shows its work; the
+harness answers \code{Name; \$X}. All 54 plain MasterControl rows at seeds 4--30 named
+the right employee and the right total and scored 0.3; 22 of 41 plain Neuromancer zeros
+ended with the right amount written as \verb|\boxed{\$12{,}632.19}|, which the regex
+could not read. The recorded H1 therefore could not be reported as a result (section
+1d). Corrected ``round 4'' scorers were written to grade an answer's \emph{final
+statement} after formatting normalisation, with a hedge defined as an explicit
+alternative inside that statement, and with the same code for both arms. Before any
+paper number was taken from them they had to: reproduce every stored answer key byte
+for byte; pass the 2,111-probe scorer battery in CI; have every row whose exactness they
+flipped relative to round 3 read by hand (111 rows, all upward, listed on the issue);
+and agree with the author's blind hand-grading of a 40-pair sample at least as well as
+round 3 did on every task. On that sample the author agreed with round 4 on 71 of 77
+marks and with round 3 on 59 of 77, and with an independent blind LLM judge over all 432
+pairs on 72 of 74. Recorded scores were never overwritten; the rescored files are
+separate and carry both scores per row. A further key defect in one task (Cerebex: the
+status was drawn before the wording that described it) corrected 13 keys with contexts
+byte-identical (``round 5'', section 1d-iii); recorded rows were regraded, not re-run.
 
-\paragraph{H2.} \PENDING{outcome of H2.}
+\paragraph{The stops were re-evaluated and both sizes ran to 320 pairs.} Under the
+corrected scorers neither size crossed its boundary at the looks where the recorded
+procedure had stopped (Table~\ref{tab:h1-looks}), so, as the O'Brien--Fleming design
+allows for a look that does not cross, both sizes continued to the final look at seed
+43. The decision for each size was recorded before its remaining rows were run (sections
+1d-ii and 1e-i). The recomputed H1 is \emph{not} the pre-registered test: its scorer was
+chosen after the data were seen. It is reported as the corrected estimate under the same
+pairing, looks and boundaries.
 
-\paragraph{H3.} \PENDING{outcome of H3.}
+\begin{table}[t]
+\centering\small
+\setlength{\tabcolsep}{3.5pt}
+\caption{H1 at every look, as recorded under the original (round-3) scorers and as
+recomputed under the corrected scorers (round 4, with the round-5 Cerebex keys), on the
+same pairs. Boundaries $|z| > 3.471$, $2.454$, $2.004$ at 112, 216 and 320 pairs;
+positive $z$ favours the harness. The recorded procedure stopped H1-medium at seed 17
+and H1-small at seed 30; its seed-30 medium row is a supplementary estimate, not a
+test. Holm across the two primaries at the final look: small $p=.0025 \to .005$,
+medium $p=.040 \to .040$. Source: \code{evals/TEST-PLAN.md} sections 1c, 1e and 1f.}
+\label{tab:h1-looks}
+\begin{tabular}{llr rrrrl rrrrl}
+\toprule
+ & & & \multicolumn{5}{c}{Recorded (round 3)} & \multicolumn{5}{c}{Corrected (round 4 + 5)} \\
+\cmidrule(lr){4-8}\cmidrule(lr){9-13}
+Look & Size & $n$ & A & B & $b$/$c$ & $z$ & Result & A & B & $b$/$c$ & $z$ & Result \\
+\midrule
+seed 17 & small  & 112 & 65  & 49 & 32/16 & $+2.31$ & inside & 70  & 76  & 11/17 & $-1.13$ & inside \\
+seed 17 & medium & 112 & 51  & 32 & 24/5  & $+3.53$ & \textbf{stop} & 63  & 55  & 11/3  & $+2.14$ & inside \\
+seed 30 & small  & 216 & 125 & 94 & 60/29 & $+3.29$ & \textbf{stop} & 135 & 149 & 16/30 & $-2.06$ & inside \\
+seed 30 & medium & 216 & 104 & 68 & 49/13 & $+4.57$ & suppl. & 121 & 109 & 22/10 & $+2.12$ & inside \\
+seed 43 & small  & 320 & \multicolumn{5}{c}{not run} & 203 & 229 & 22/48 & $-3.11$ & \textbf{crosses, plain} \\
+seed 43 & medium & 320 & \multicolumn{5}{c}{not run} & 177 & 162 & 31/16 & $+2.19$ & \textbf{crosses, harness} \\
+\bottomrule
+\end{tabular}
+\end{table}
 
-\paragraph{H4.} \PENDING{large-size completion and accuracy per harness arm.}
+\subsection{H1: harness v0.1 32K vs plain-128K}
+\label{sec:h1}
 
-\paragraph{Breakdowns.} \PENDING{per-task and per-author-model accuracy, the
-task-weighted average and the cluster bootstrap by task; replicate disagreement rate;
-failure taxonomy (wrong evidence, misread, bad combination, early commit, turn cap,
-format, crash).} \TODO{Add per-task and cluster-bootstrap tables to
-\code{make\_tables.py}.}
+\IfFileExists{tables/main_h1_analysis.tex}{\input{tables/main_h1_analysis.tex}}{%
+\pendingtable{H1 exclusion sets, bootstrap and GLMM.}{main\_h1\_analysis.tex}}
+\IfFileExists{tables/main_h1_per_task.tex}{\input{tables/main_h1_per_task.tex}}{%
+\pendingtable{H1 per task.}{main\_h1\_per\_task.tex}}
+\IfFileExists{tables/main_h1_cost.tex}{\input{tables/main_h1_cost.tex}}{%
+\pendingtable{H1 completion, cost and latency.}{main\_h1\_cost.tex}}
+
+\paragraph{Small (confirmatory, final look).} The harness and the single-call baseline
+differ, in the baseline's favour: 203 vs 229 exact of 320, $b=22$, $c=48$, $z=-3.11$,
+exact McNemar $p=.0025$ (Table~\ref{tab:h1-analysis}). The GLMM agrees (arm odds ratio
+0.46, $p=.002$). The task-clustered bootstrap does not: the exact-rate difference is
+$-0.081$ with a 95\% interval of $[-0.294, 0.072]$, which includes zero, because the
+effect is one task. SHODAN (Table~\ref{tab:h1-per-task}): harness 2 of 40, plain 32 of
+40 ($b=1$, $c=31$). 39 of the 40 harness SHODAN rows hit the 20-turn cap and one the
+time limit; none submitted an answer. Leaving SHODAN out gives $z=+0.65$ ($p=.63$);
+leaving out any other task keeps $z$ between $-2.65$ and $-4.63$. This is a harness
+failure on that task under the v0.1 turn and output budget, not a scoring artefact: the
+plain answers are exact key matches. Dropping the harness's turn-cap and time-limit rows
+(a sensitivity set, post-treatment) gives $n=228$, $z=+0.78$. The discordance rate
+$b+c=70$ of 320 (0.22) sits near the noise floors: the A/A floor (plain-32K vs
+plain-128K on identical small input, where both fit) is 10 of 56 cells (0.18), and the
+temperature-0 replay floor on the same stack is 5 of 48 rows (0.10).
+
+\paragraph{Medium (confirmatory, final look).} The arms differ, in the harness's favour:
+177 vs 162 exact, $b=31$, $c=16$, $z=+2.19$, $p=.040$. The margin is one pair: with
+$b=30$, $c=17$ the look would have been inside the boundary. The bootstrap interval
+($+0.047$, $[-0.047, 0.163]$) includes zero; the GLMM is at the edge (odds ratio 1.72,
+$p=.046$). The effect is mostly one task: Neuromancer, harness 32 vs plain 17 ($b=18$,
+$c=3$), where 15 of the 18 plain losses are normal finishes with a wrong answer. Leaving
+Neuromancer out gives $z=0.00$. The crossing also depends on the 40 medium GLaDOS
+contexts that do not fit plain-128K: the pre-registered primary counts them against
+plain, which is the question H1 asks (can the harness answer what the baseline cannot
+read), and the harness gets 4 of them; the pre-registered secondary set that drops them
+gives $n=280$, $z=+1.68$, $p=.126$, inside the boundary. Cerebex goes the other way
+(harness 29, plain 35). SHODAN is 0 of 40 for both arms: plain hits the output-length
+cap on all 40, the harness the turn cap on 37 and the time limit on 3. Without Multivac,
+whose corrected scorer still under-credits some right answers (section 1d-ii),
+$z=+2.47$, $p=.020$.
+
+\paragraph{What H1 says.} The two sizes point in opposite directions, and each result
+rests on one or two tasks. Small favours the baseline because of SHODAN; medium favours
+the harness because of Neuromancer and the GLaDOS inputs that do not fit the baseline's
+window. Both primaries cross their final boundaries and both survive Holm, but neither
+supports a general claim that the harness is better or worse than long-context prompting
+on this model: with eight tasks as the clusters, both bootstrap intervals include zero,
+and both discordance rates are within a factor of two of the measurement noise floor.
+
+\paragraph{Completion, cost and latency.} (Table~\ref{tab:h1-cost}.) At small size the
+harness submitted an answer on 228 of 320 questions (87 turn caps, 5 time limits) against
+the baseline's 320, took about twice the wall-clock time at the median (398 vs 204 s)
+and about 3.9 times the prompt tokens (70,116 vs 18,191 per question, sub-calls
+included), with 0.71 sub-calls and 13.5 turns per question. At medium size the harness
+finished 202 of 320 (111 turn caps, 7 time limits) and the baseline 236 (40 contexts did
+not fit, 44 hit the 16,384-token output cap: all 40 SHODAN rows and 4 Neuromancer rows);
+median latency was 421 s against 580 s, and prompt tokens were level (79,788 vs
+79,905) because the baseline's prompt is the whole document. Latency figures are for
+shared hardware with two serving slots (Section~\ref{sec:threats}).
+
+\paragraph{Construct validity: what a non-LLM shortcut scores.} Per the plan's
+construct-validity check (section 1b), two deterministic solvers with no model and no
+answer key were run on every confirmatory question: the last-mentioned candidate of the
+answer's type, and a keener regex on the question's key terms, each graded by the
+task's own scorer. On seeds 4--43 the regex solves MasterControl 40 of 40 at both sizes,
+Multivac 40 of 40 (the last-mentioned status alone does), and SELMA 36 of 40 small and
+39 of 40 medium; those three tasks are therefore flagged as measuring search rather than
+multi-hop reasoning, and the per-task table should be read with that in mind (they are
+also the three tasks both arms answer almost perfectly). The other five tasks score at
+most 7 of 40 (Cerebex small) and mostly 0; GLaDOS, Neuromancer, SHODAN and
+TheDixieFlatline are not solvable by either shortcut
+(\code{evals/independent/shortcut\_solver.py}).
+
+\subsection{H2--H7: pending}
+\label{sec:pending}
+
+\paragraph{H2, H3.} \PENDING{Configuration comparison and delegation (harness v0.2 128K
+vs v0.1), seeds 4--9 and onward, reported as estimates with task-clustered intervals and
+labelled secondary. The two harness v0.2 rows lost to the server-side ``malformed tool
+call'' rejection (Section~\ref{sec:threats}) score 0 with a sensitivity set excluding
+them.}
+
+\paragraph{H4.} \PENDING{Large-size completion and exact-match accuracy per harness
+arm with intervals (64 questions per arm). An estimate, not a test, and not a capability
+claim.}
+
+\paragraph{H5.} \PENDING{The native-sampling grid, pre-registered 2026-10-25 (section
+1g), runs after H1 and is never pooled with the preset grid.}
+
+\paragraph{H6, H7.} \PENDING{The map-reduce and REPL-only baseline arms, pre-registered
+2026-10-25 (section 1h), run after H5 from a separate checkout at a recorded commit.}
+
+\paragraph{Second model.} A confirmatory H1 on a second local model (Laguna S 2.1) and
+a frontier replication kit with the paper's own settings were pre-registered on
+2026-10-29 (sections 1i and 1j); neither has rows yet, and neither is part of the claims
+above.
 
 % ===========================================================================
 \section{Pilot and lessons learned (preliminary)}
@@ -693,10 +876,28 @@ runs were lost when temporary worktrees were cleaned (their summary files surviv
 \section{Discussion}
 \label{sec:discussion}
 
-\PENDING{Interpretation of H1--H4. To be written after the main grid. It should
-address: whether any harness advantage within the window survives fair measurement
-at the pre-registered sample size; whether more delegation buys accuracy on these tasks; and the
-cost--accuracy trade-off on serial hardware.}
+On H1 the answer to the paper's question is: not in general, on this model and these
+tasks. Within the window (small size) the single-call baseline was more accurate, and
+the whole difference is one task on which the v0.1 harness could not finish inside its
+20 turns. Beyond the baseline's comfortable reach (medium size) the harness was more
+accurate, and the difference is mostly one task plus the inputs the baseline could not
+read at all. Both effects are statistically real under the pre-registered procedure and
+both are fragile under the clustered analysis the plan also pre-registered. The honest
+summary is task-conditional: where a question needs the model to carry a state through
+many records (SHODAN's per-office credits, 18 shipments), v0.1's turn and output budget
+is the binding constraint, not recursion; where the document does not fit, the harness
+is the only arm that answers at all; and on the five tasks both arms solve nearly
+perfectly, including the three a regex also solves, the harness pays twice the latency
+and several times the tokens for the same answer. Whether a larger budget (H2) or more
+delegation (H3) changes the small-size picture, and whether code in a REPL without
+recursion does as well (H7), are the pending secondary questions.
+
+The scorer episode is part of the result. A frozen, battery-tested grader still carried
+a one-directional bias that the pre-registered procedure could not see, because the two
+arms write their answers differently. It was found only when the per-task table was put
+beside raw answers in a review. The corrected scorers reversed the small-size result and
+moved the medium stop by a look. We report both so that the reader can see the size of a
+measurement choice next to the size of the effect.
 
 Two points can be made now, because they concern design rather than results. First,
 our tasks are mostly multi-hop chains whose deciding evidence is a handful of
@@ -746,13 +947,39 @@ questions in 16, which is the size of the effects under study.
   developed with Claude models, and Claude also orchestrated the evaluation. The
   task generators were deliberately sourced elsewhere, but the analysis pipeline was
   not independently reimplemented.
+\item \textbf{Generator-author familiarity.} The eight generators were written by eight
+  other models, and a Qwen-family lane was excluded because the system under test is
+  Qwen-branded. Lineage is still a threat: training-data overlap between a generator's
+  author and the model under test could make that task's conventions more familiar to
+  it, in either arm, and we cannot measure that. The per-author breakdown is reported
+  with the per-task one so the reader can see which models' tasks drove each result.
+\item \textbf{The scorer defect.} The frozen scorers penalised one arm's answer style
+  (Section~\ref{sec:deviations}). The corrected scorers were chosen after the data were
+  seen, so the recomputed H1 is a corrected estimate, not the pre-registered test; the
+  validation steps, the hand-read flips and the agreement with blind human grading are
+  the evidence that the correction is not itself a bias. Multivac's corrected scorer
+  still under-credits some right answers in both arms, so medium is reported with and
+  without it.
+\item \textbf{A server-side rejection counted as a model failure.} In fence mode the
+  serving engine returned HTTP 400 ``malformed tool call'' when the model emitted
+  tool-call-shaped text instead of a code fence; two harness v0.2 rows (Multivac, small,
+  seeds 4 and 5) died this way. By a decision recorded before any score was read they
+  count as wrong, labelled \code{malformed\_tool\_call}, and every analysis containing
+  them is also reported with them excluded. No H1 row is affected.
+\item \textbf{Three tasks are search.} A non-LLM regex solves MasterControl, Multivac
+  and SELMA almost perfectly (Section~\ref{sec:h1}). Results on those tasks measure
+  whether an arm can find and copy a value, not multi-hop reasoning; they are kept in
+  the primary because the plan put them there, and the per-task table lets a reader set
+  them aside.
 \end{itemize}
 
 % ===========================================================================
 \section{Future work}
 \label{sec:future}
 
-The test plan orders the remaining work as follows. (1) Finish the first stage of the main grid (seeds 4--9, then 64 large questions) and extend the primary comparison toward 320 pairs. (2) Validity checks: question-only and
+The test plan orders the remaining work as follows. (1) H2--H7 as pre-registered
+(Section~\ref{sec:pending}), and a diagnostic reading of the SHODAN trajectories to
+classify the turn-cap failures; any harness fix is a new arm with its own rows. (2) Validity checks: question-only and
 evidence-deleted controls, counterfactual twins, independent hand reconstruction of
 keys, a 10\% human grading audit, and recovery of answers reached but not submitted.
 (3) Instrumentation of completion and of what each arm actually received. (4) A
@@ -774,6 +1001,34 @@ Also planned: the repeat of the main grid with the model's embedded sampling def
 more task generators from outside models, and a frontier model as a ceiling. 
 
 % ===========================================================================
+\section*{Provenance of the system under test}
+\label{sec:provenance}
+Table~\ref{tab:provenance} summarises \code{paper/provenance.md}, which records every
+hash and command needed to rebuild the stack the numbers come from.
+
+\begin{table}[t]
+\centering\small
+\caption{What was tested. Full values, including the four GGUF shard hashes, the
+tokenizer and chat-template hashes, the three-line local engine patch and the build
+flags, are in \code{paper/provenance.md}.}
+\label{tab:provenance}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Item & Value \\
+\midrule
+Model & Qwen3.8 Flash Next, GGUF \code{general.architecture = qwen4exp}; 48 blocks, 512 experts, 10 active, 262,144-token native context \\
+Weights & Huihui.ai abliterated build, Unsloth Dynamic \code{UD-Q4\_K\_XL}, 4 shards, 103.7 GiB; Hugging Face \code{huihui-ai/Huihui-Qwen3.8-Flash-Next-abliterated-GGUF}, shards unchanged from revision \code{7e3bfc316b88} (2026-09-06) through \code{4fdf4dc4d851}, deleted from the repository 2026-10-11 (pin a revision at or before \code{4fdf4dc4d851}) \\
+Draft head & multi-token-prediction head from the same release, used for speculative decoding (\code{--spec 4 --spec-min-p 0.5}) \\
+Tokenizer & GGUF BPE (\code{tokenizer.ggml.pre = qwen35}); chat template from the GGUF, 9,993 chars, applied server-side; the harness never tokenises (\code{ceil(chars/3.5)} estimates) \\
+Engine & Strata, V100 fork \code{jmnargi/Strata-V100} commit \code{a4b679b1} (2026-10-05) with one local patch (skip the architecture check on continuation shards); ggml from llama.cpp \code{3cf0325}; CUDA 12.9, driver 580.159.04 \\
+Server & \code{strata --serve --max-context 262144 --kv-resident 65536 --kv int8 --batch 2}, int8 KV cache, 65,536 tokens resident, two slots, since 2026-10-08 11:55 CDT; every row in \code{runs/exp-v02} ran under it \\
+Sampling & per request, from the harness profile: root temperature 0.6, top-$p$ 0.95, top-$k$ 20, thinking on; sub-calls 0.7, 0.8, 20, presence penalty 1.0, thinking off \\
+Hardware & \code{pluto}: Ryzen 5 5600X, 125 GiB RAM, RHEL 9.8; Tesla V100 32 GB (PCIe x16, dense layers and most of the expert cache), RTX 3060 12 GB (external dock, x4), Tesla P100 16 GB (x4); non-resident experts and the n-gram table (about 26.8 GiB) in system RAM, about 89\% expert-cache hit rate during decode \\
+Scorers & \code{evals/independent/manifest.json}: \code{active} = round 4 (final-statement scoring) with round-5 Cerebex keys, sha256-pinned; every run file records the set that scored it \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
 \section*{Code and data availability}
 The harness, the task generators with their full provenance (brief, verbatim
 answers, every repair round and the audit), the runner and this paper's analysis
